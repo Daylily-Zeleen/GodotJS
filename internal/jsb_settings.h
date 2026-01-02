@@ -47,6 +47,8 @@ namespace jsb::internal
 
         static bool is_packaging_referenced_node_modules();
 
+        static bool is_script_inline_resource_uid();
+
 #ifdef TOOLS_ENABLED
         // [EDITOR ONLY]
         static bool editor_settings_available();

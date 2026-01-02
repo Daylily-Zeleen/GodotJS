@@ -38,6 +38,8 @@ namespace jsb::internal
     static constexpr char kRtPackagingIncludeDirectories[] = JSB_MODULE_NAME_STRING "/editor/packaging/include_directories";
     static constexpr char kRtPackagingReferencedNodeModules[] = JSB_MODULE_NAME_STRING "/editor/packaging/referenced_node_modules";
 
+    static constexpr char kScriptInlineResourceUID[] = JSB_MODULE_NAME_STRING "/editor/script/inline_uid";
+
 #ifdef TOOLS_ENABLED
     bool init_editor_settings()
     {
@@ -124,6 +126,7 @@ namespace jsb::internal
             }
 
             _GLOBAL_DEF(kRtPackagingReferencedNodeModules, true, false);
+            _GLOBAL_DEF(kScriptInlineResourceUID, true, false);
         }
     }
 
@@ -200,6 +203,12 @@ namespace jsb::internal
     {
         init_settings();
         return GLOBAL_GET(kRtPackagingReferencedNodeModules);
+    }
+
+    bool Settings::is_script_inline_resource_uid()
+    {
+        init_settings();
+        return GLOBAL_GET(kScriptInlineResourceUID);
     }
 
     uint16_t Settings::get_debugger_port()
