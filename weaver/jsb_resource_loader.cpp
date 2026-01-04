@@ -163,3 +163,46 @@ void ResourceFormatLoaderGodotJSScript::get_dependencies(const String& p_path, L
 {
     //TODO
 }
+
+
+#define UID_COMMENT_PREFIX "// uid://"
+static ResourceUID::ID extract_uid_from_line(const String &p_line) {
+	Vector<String> splits = p_line.strip_edges().substr(3).split(" ", false, 1);
+	if (splits.is_empty()) {
+		return ResourceUID::INVALID_ID;
+	}
+	return ResourceUID::get_singleton()->text_to_id(splits[0]);
+}
+
+ResourceUID::ID ResourceFormatLoaderGodotJSScript::get_resource_uid(const String &p_path) const {
+	int64_t uid = ResourceUID::INVALID_ID;
+
+	if (FileAccess::exists(p_path + ".uid")) {
+		Ref<FileAccess> file = FileAccess::open(p_path + ".uid", FileAccess::READ);
+		if (file.is_valid()) {
+			uid = ResourceUID::get_singleton()->text_to_id(file->get_line());
+		}
+	} else {
+		const String extension = p_path.get_extension().to_lower();
+		if (extension == "ts") {
+			Ref<FileAccess> file = FileAccess::open(p_path, FileAccess::READ);
+			if (file.is_valid()) {
+				while (!file->eof_reached()) {
+					String line = file->get_line().strip_edges();
+					if (!line.is_empty()) {
+						if (line.begins_with(UID_COMMENT_PREFIX)) {
+							uid = extract_uid_from_line(line);
+						}
+						break;
+					}
+				}
+			}
+		}
+	}
+
+	return uid;
+}
+
+bool ResourceFormatLoaderGodotJSScript::has_custom_uid_support() const {
+	return jsb::internal::Settings::is_script_inline_resource_uid();
+}

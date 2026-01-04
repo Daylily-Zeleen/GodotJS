@@ -54,6 +54,8 @@ namespace jsb::internal
 
         static int get_scene_dts_generate_strategic();
 
+        static bool is_script_inline_resource_uid();
+
 #ifdef TOOLS_ENABLED
         // [EDITOR ONLY]
         static bool editor_settings_available();

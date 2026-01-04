@@ -50,6 +50,8 @@ namespace jsb::internal
 
     static constexpr char kRtSceneDTSGenerateStrategic[] = JSB_MODULE_NAME_STRING "/codegen/scene_dts/generate_strategic";
 
+    static constexpr char kScriptInlineResourceUID[] = JSB_MODULE_NAME_STRING "/editor/script/inline_uid";
+
 #ifdef TOOLS_ENABLED
     bool init_editor_settings()
     {
@@ -196,6 +198,7 @@ namespace jsb::internal
                 _GLOBAL_DEF(SceneDTSGenerateStrategic, BitField<GodotJSEditorHelper::SceneDTSGenerateStrategic>(GodotJSEditorHelper::SCENE_DTS_GENERATE_STRATEGIC_ORIGIN_NAME_NODE), false, JSB_SET_IGNORE_DOCS(false), JSB_SET_BASIC(true),  JSB_SET_INTERNAL(false));
             }
 #endif // TOOLS_ENABLED
+            _GLOBAL_DEF(kScriptInlineResourceUID, true, false);
         }
     }
 
@@ -302,6 +305,12 @@ namespace jsb::internal
     {
         init_settings();
         return GLOBAL_GET(kRtSceneDTSGenerateStrategic);
+    }
+
+    bool Settings::is_script_inline_resource_uid()
+    {
+        init_settings();
+        return GLOBAL_GET(kScriptInlineResourceUID);
     }
 
     uint16_t Settings::get_debugger_port()
