@@ -2,10 +2,14 @@
 
 namespace jsb
 {
+    StringName JSCallable::get_method() const
+    {
+        return SNAME("JSFunction");
+    }
+
     String JSCallable::get_as_text() const
     {
-        //TODO a human readable string, but OK if empty
-        return String();
+        return vformat("[JSFunction: object_id=%s, callback_id=%s]", object_id_.operator uint64_t(), callback_id_.to_string());
     }
 
     JSCallable::~JSCallable()

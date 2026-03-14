@@ -42,6 +42,7 @@ namespace jsb
          */
         virtual bool is_valid() const override { return object_id_.is_null() || jsb::compat::ObjectDB::get_instance(object_id_); }
 
+        virtual StringName get_method() const override;
         virtual String get_as_text() const override;
         virtual ObjectID get_object() const override { return object_id_; }
         virtual void call(const Variant** p_arguments, int p_argcount, Variant& r_return_value, Callable::CallError& r_call_error) const override;
