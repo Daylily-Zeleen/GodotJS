@@ -8,6 +8,9 @@ on:
       version:
         required: true
         type: string
+      version_mm:
+        required: true
+        type: string
       version_ref:
         description: "Godot engine commit reference"
         required: true
@@ -16,14 +19,6 @@ on:
 # Global Settings
 # SCONS_CACHE for windows must be set in the build environment
 env:
-  # 4.4
-  SCONSFLAGS: >-
-    module_text_server_fb_enabled=yes
-    d3d12=yes
-    strict_checks=yes
-    debug_symbols=no
-    "angle_libs=${{ github.workspace }}/"
-  # 4.5+
   # Ideally we'd use dev_mode=yes. Unfortunately, v8 headers contain warnings. So we manually set some dev_mode options.
   SCONS_FLAGS: >-
     verbose=yes
@@ -33,7 +28,8 @@ env:
     debug_symbols=no
     d3d12=yes
     "angle_libs=${{ github.workspace }}/"
-    "accesskit_sdk_path=${{ github.workspace }}/accesskit-c-0.17.0/"
+    "accesskit_sdk_path=${{ github.workspace }}/accesskit-c-0.${{ inputs.version_mm == '4.5' && '17' || '18' }}.0/"
+    skip_js_runtime=yes
   SCONS_CACHE_MSVC_CONFIG: true
   PYTHONIOENCODING: utf8
 
@@ -50,14 +46,14 @@ jobs:
         target: ${{ inputs.release && fromJSON('["editor","template_release","template_debug"]') || fromJSON('["editor"]') }}
     steps:
       - name: Checkout Godot
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: godotengine/godot
           ref: ${{ inputs.version_ref }}
           submodules: recursive
 
       - name: Checkout GodotJS
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           path: ${{github.workspace}}/modules/GodotJS/
           lfs: true
@@ -70,23 +66,25 @@ jobs:
         continue-on-error: true
 
       - name: Download scripts/out
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: scripts-out
           path: ${{github.workspace}}/modules/GodotJS/scripts/out
-
-      - name: Download tests/project
-        if: ${{ !inputs.release && matrix.target == 'editor' }}
-        uses: actions/download-artifact@v4
-        with:
-          name: tests-project
-          path: ${{github.workspace}}/modules/GodotJS/tests/project/.godot/GodotJS
 
       - name: Setup Python and SCons
         uses: ./.github/actions/godot-deps
 
       - name: Download Direct3D 12 SDK components
-        run: python ./misc/scripts/install_d3d12_sdk_windows.py
+        shell: sh
+        id: d3d12-sdk
+        run: |
+          if python ./misc/scripts/install_d3d12_sdk_windows.py; then
+            echo "D3D12_ENABLED=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Windows: Direct3D 12 SDK installation failed, building without Direct3D 12 support."
+            echo "D3D12_ENABLED=no" >> "$GITHUB_OUTPUT"
+          fi
+        continue-on-error: true
 
       - name: Download pre-built ANGLE static libraries
         uses: dsaltares/fetch-gh-release-asset@1.1.2
@@ -99,8 +97,8 @@ jobs:
       - name: Extract pre-built ANGLE static libraries
         run: Expand-Archive -Force angle/angle.zip ${{ github.workspace }}/
 
-      - name: Download pre-built AccessKit [4.5+]
-        if: inputs.version != '4.4'
+      - name: Download pre-built AccessKit v17 [4.5]
+        if: inputs.version_mm == '4.5'
         uses: dsaltares/fetch-gh-release-asset@1.1.2
         with:
           repo: AccessKit/accesskit-c
@@ -108,31 +106,30 @@ jobs:
           file: accesskit-c-0.17.0.zip
           target: accesskit-c-0.17.0/accesskit_c.zip
 
-      - name: Extract pre-built AccessKit [4.5+]
-        if: inputs.version != '4.4'
+      - name: Extract pre-built AccessKit v17 [4.5]
+        if: inputs.version_mm == '4.5'
         run: unzip -o accesskit-c-0.17.0/accesskit_c.zip
 
-      - name: Compilation (4.4)
-        if: inputs.version == '4.4'
-        uses: ./.github/actions/godot-build
+      - name: Download pre-built AccessKit v18 [4.6]
+        if: inputs.version_mm == '4.6'
+        uses: dsaltares/fetch-gh-release-asset@1.1.2
         with:
-          sconsflags: >-
-            ${{ env.SCONSFLAGS }} 
-            ${{ matrix.target == 'editor' && 'vsproj=yes vsproj_gen_only=no windows_subsystem=console' || '' }} 
-            ${{ matrix.engine == 'qjs-ng' && 'use_quickjs_ng=yes' || '' }} 
-            ${{ !inputs.release && matrix.target == 'editor' && 'tests=yes' || '' }}
-          platform: windows
-          target: ${{ matrix.target }}
-          scons-cache-limit: 2
+          repo: AccessKit/accesskit-c
+          version: tags/0.18.0
+          file: accesskit-c-0.18.0.zip
+          target: accesskit-c-0.18.0/accesskit_c.zip
 
-      - name: Compilation (4.5+)
-        if: inputs.version != '4.4'
+      - name: Extract pre-built AccessKit v18 [4.6]
+        if: inputs.version_mm == '4.6'
+        run: unzip -o accesskit-c-0.18.0/accesskit_c.zip
+
+      - name: Compilation
         uses: ./.github/actions/godot-build
         with:
           scons-flags: >-
-            ${{ env.SCONS_FLAGS }} 
-            ${{ matrix.target == 'editor' && 'vsproj=yes vsproj_gen_only=no windows_subsystem=console' || '' }} 
-            ${{ matrix.engine == 'qjs-ng' && 'use_quickjs_ng=yes' || '' }} 
+            ${{ env.SCONS_FLAGS }}
+            ${{ matrix.target == 'editor' && 'vsproj=yes vsproj_gen_only=no windows_subsystem=console' || '' }}
+            ${{ matrix.engine == 'qjs-ng' && 'use_quickjs_ng=yes' || '' }}
             ${{ !inputs.release && matrix.target == 'editor' && 'tests=yes' || '' }}
           platform: windows
           target: ${{ matrix.target }}
@@ -146,6 +143,26 @@ jobs:
       - name: Prepare artifact
         run: |
           Remove-Item bin/* -Include *.exp,*.lib,*.pdb -Force
+
+      - name: Setup pnpm
+        if: ${{ !inputs.release && matrix.target == 'editor' }}
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.11.0
+
+      - name: Setup Node.js
+        if: ${{ !inputs.release && matrix.target == 'editor' }}
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      - name: Build tests/project
+        if: ${{ !inputs.release && matrix.target == 'editor' }}
+        shell: pwsh
+        run: |
+          $env:GODOT = "${{ github.workspace }}/bin/godot.windows.editor.x86_64.exe"
+          pnpm -C "${{ github.workspace }}/modules/GodotJS/tests/project" install --ignore-workspace
+          pnpm -C "${{ github.workspace }}/modules/GodotJS/tests/project" build
 
       - name: Upload artifact
         uses: ./.github/actions/upload-artifact

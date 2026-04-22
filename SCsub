@@ -91,7 +91,7 @@ lws_prebuilt_libs = LibraryDescriptor("lws", \
 ])
 quickjs_src_descs = ThirdPartyDescriptor("quickjs", \
 [
-    ThirdPartyDetails("quickjs-ng", ["cutils.c", "libbf.c", "libregexp.c", "libunicode.c", "quickjs.c"]),
+    ThirdPartyDetails("quickjs-ng", ["dtoa.c", "libregexp.c", "libunicode.c", "quickjs.c"]),
     ThirdPartyDetails("quickjs",    ["cutils.c", "libbf.c", "libregexp.c", "libunicode.c", "quickjs.c"]),
 ])
 
@@ -183,7 +183,7 @@ if quickjs_support is None and jsc_support is None and is_library_supported(v8_p
     if is_library_supported(lws_prebuilt_libs):
         download_dependency("lws", deps_lws_version, "lws")
 
-v8_support = validate_library_support(v8_prebuilt_libs) if quickjs_support is None else None
+v8_support = validate_library_support(v8_prebuilt_libs) if quickjs_support is None and jsc_support is None else None
 lws_support = validate_library_support(lws_prebuilt_libs) if v8_support is not None else None
 
 jsb_defines = [
@@ -202,7 +202,6 @@ jsb_defines = [
         "Use the host browser's javascript engine.",
         "Be aware that all script sources are evaluated in the host browser, which can be fully debugged with the browser's developer tools.",
         "It's recommended to obfuscate the script sources before deploying the project in a production environment.",
-        "NOTE: web.impl is experimental and may not work as expected.",
         "NOTE: Obfuscation may not work in the current version. It'll be improved in the future versions. Report an issue if it breaks.",
     ]),
     CompileDefines("JSB_WITH_JAVASCRIPTCORE", 1 if jsc_support is not None else 0, [
@@ -466,6 +465,12 @@ module_obj = []
 print(f"godot engine: {version_info['major']}.{version_info['minor']}")
 check("regex" in env.module_list, "Currently, the 'regex' module is required for using GodotJS. Please rebuild the engine with it enabled.")
 
+# Build JS files before generating
+if not env["skip_js_runtime"]:
+    pnpm_command = shutil.which("pnpm")
+    print(subprocess.run([pnpm_command, "install"], check=True))
+    print(subprocess.run([pnpm_command, "build"], check=True))
+
 if v8_support is not None:
     # it seems godot always links MT_StaticRelease even if env["dev_build"]
     # it seems v8_monolith must be compiled with `use_rtti=true` explicitly, or the linker will fail on `v8::ArrayBuffer::Allocator`
@@ -565,7 +570,7 @@ if quickjs_support is not None:
     env_jsb.add_source_files(module_obj, "impl/quickjs/*.cpp")
 
 if is_defined("JSB_WITH_WEB"):
-    print_warning("web.impl is experimental and may not work as expected")
+    check(os.path.exists("impl/web/js"), "impl/web/js (GodotJS web bridge) has not been built")
 
     env_jsb.add_source_files(module_obj, "impl/web/*.cpp")
 
@@ -583,10 +588,7 @@ if is_defined("JSB_WITH_JAVASCRIPTCORE"):
         if env.msvc and env["vsproj"]:
             env.Append(CPPPATH=[f"#modules/{module_name}/impl/jsc/_NOT_FOR_INCLUDE_"])
 
-# Build JS files before generating
-if not os.path.exists("scripts/out"):
-    print(subprocess.run(["pnpm", "install"], shell=True, check=True))
-    print(subprocess.run(["pnpm", "build"], shell=True, check=True))
+check(os.path.exists("scripts/out"), "scripts/out (GodotJS JavaScript runtime) has not been built")
 
 generate_code([\
         # presets for runtime

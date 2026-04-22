@@ -290,16 +290,16 @@ const TypeMutations: Record<string, TypeMutation> = {
     EditorUndoRedoManager: {
         property_overrides: {
             add_do_method: [
-                `${names.get_member("add_do_method")}<T extends GObject, M extends GodotNames<T>>(object: T, method: M, ...args: ResolveGodotNameParameters<T, M>): void`,
+                `${names.get_member("add_do_method")}<T extends ${names.get_class("Object")}, M extends GodotNames<T>>(object: T, method: M, ...args: ResolveGodotNameParameters<T, M>): void`,
             ],
             add_undo_method: [
-                `${names.get_member("add_undo_method")}<T extends GObject, M extends GodotNames<T>>(object: T, method: M, ...args: ResolveGodotNameParameters<T, M>): void`,
+                `${names.get_member("add_undo_method")}<T extends ${names.get_class("Object")}, M extends GodotNames<T>>(object: T, method: M, ...args: ResolveGodotNameParameters<T, M>): void`,
             ],
             add_do_property: [
-                `${names.get_member("add_do_property")}<T extends GObject, P extends GodotNames<T>>(object: T, property: P, value: ResolveGodotNameValue<T, P>): void`,
+                `${names.get_member("add_do_property")}<T extends ${names.get_class("Object")}, P extends GodotNames<T>>(object: T, property: P, value: ResolveGodotNameValue<T, P>): void`,
             ],
             add_undo_property: [
-                `${names.get_member("add_undo_property")}<T extends GObject, P extends GodotNames<T>>(object: T, property: P, value: ResolveGodotNameValue<T, P>): void`,
+                `${names.get_member("add_undo_property")}<T extends ${names.get_class("Object")}, P extends GodotNames<T>>(object: T, property: P, value: ResolveGodotNameValue<T, P>): void`,
             ],
         },
     },
@@ -500,6 +500,12 @@ const TypeMutations: Record<string, TypeMutation> = {
             move_child: mutate_parameter_type(names.get_parameter("child_node"), "NodePathMapChild<Map>"),
             remove_child: mutate_parameter_type("node", "NodePathMapChild<Map>"),
             validate_property: mutate_parameter_type("property", "GDictionary<PropertyInfo>"),
+            rpc: [
+                `${names.get_member("rpc")}<Method extends ${names.get_class("GodotRPCNames")}<this>>(method: Method, ...varargs: ${names.get_class("ResolveGodotRPCParameters")}<this, Method>): Error`,
+            ],
+            rpc_id: [
+                `${names.get_member("rpc_id")}<Method extends ${names.get_class("GodotRPCNames")}<this>>(${names.get_parameter("peer_id")}: int64, method: Method, ...varargs: ${names.get_class("ResolveGodotRPCParameters")}<this, Method>): Error`,
+            ],
         },
     },
     // GObject:
@@ -577,10 +583,10 @@ const TypeMutations: Record<string, TypeMutation> = {
     UndoRedo: {
         property_overrides: {
             add_do_property: [
-                `${names.get_member("add_do_property")}<T extends GObject, P extends GodotNames<T>>(object: T, property: P, value: ResolveGodotNameValue<T, P>): void`,
+                `${names.get_member("add_do_property")}<T extends ${names.get_class("Object")}, P extends GodotNames<T>>(object: T, property: P, value: ResolveGodotNameValue<T, P>): void`,
             ],
             add_undo_property: [
-                `${names.get_member("add_undo_property")}<T extends GObject, P extends GodotNames<T>>(object: T, property: P, value: ResolveGodotNameValue<T, P>): void`,
+                `${names.get_member("add_undo_property")}<T extends ${names.get_class("Object")}, P extends GodotNames<T>>(object: T, property: P, value: ResolveGodotNameValue<T, P>): void`,
             ],
         },
     },
@@ -747,7 +753,7 @@ class CodegenTasks {
         this.tasks.push({ name: name, execute: func });
     }
 
-    async submit(withToast: boolean = true) {
+    async submit() {
         const EditorProgress = godot.GodotJSEditorProgress;
         const progress = new EditorProgress();
         let force_wait = 24;
@@ -772,12 +778,21 @@ class CodegenTasks {
             }
 
             progress.finish();
-            if (withToast) {
-                toast(`${this._name} generated successfully`);
+
+            const message = `${this._name} generated successfully`;
+
+            if (godot.DisplayServer.get_name() === "headless") {
+                console.log(message);
+            } else {
+                toast(message);
             }
         } catch (e) {
             console.error(`CodegenTask ${this._name} error:`, e);
-            toast(`${this._name} failed!`);
+
+            if (godot.DisplayServer.get_name() !== "headless") {
+                toast(`${this._name} failed!`);
+            }
+
             progress.finish();
         }
     }
@@ -826,12 +841,17 @@ const RemappedPrimitiveTypeNames: Partial<Record<Godot.Variant.Type, string>> = 
     [godot.Variant.Type.TYPE_STRING]: "string",
 };
 
+const BindableVariantTypes = (function (): Godot.Variant.Type[] {
+    const types: Godot.Variant.Type[] = [];
+    for (let variant_type = godot.Variant.Type.TYPE_NIL; variant_type < godot.Variant.Type.TYPE_MAX; ++variant_type) {
+        types.push(variant_type);
+    }
+    return types;
+})();
+
 const VariantTypeNames = (function (): Map<Godot.Variant.Type, string> {
     const variant_name_map = new Map<Godot.Variant.Type, string>();
-    for (const variant_type of Object.values(godot.Variant.Type)) {
-        if (typeof variant_type !== "number" || variant_type === godot.Variant.Type.TYPE_MAX) {
-            continue;
-        }
+    for (const variant_type of BindableVariantTypes) {
         const name = RemappedPrimitiveTypeNames[variant_type] ?? jsb.internal.names.get_variant_type(variant_type);
         variant_name_map.set(variant_type, name);
     }
@@ -855,10 +875,7 @@ const GlobalUtilityFuncs = [
 
 const VariantNames = (function (): Partial<Record<string, Godot.Variant.Type>> {
     const name_map: Partial<Record<string, Godot.Variant.Type>> = {};
-    for (const variant_type of Object.values(godot.Variant.Type)) {
-        if (typeof variant_type !== "number" || variant_type === godot.Variant.Type.TYPE_MAX) {
-            continue;
-        }
+    for (const variant_type of BindableVariantTypes) {
         name_map[godot.type_string(variant_type)] = variant_type; // Godot internal
         name_map[VariantTypeNames.get(variant_type)!] = variant_type; // GodotJS name
     }
@@ -3255,6 +3272,28 @@ export class TypeDB {
         return `${replace_var_name(info.name)}${optional ? "?" : ""}: ${this.make_typename(info, true, true)}`;
     }
 
+    private is_empty_default_value(value: unknown): boolean {
+        if (value === null) {
+            return true;
+        }
+
+        if (Array.isArray(value)) {
+            return value.length == 0;
+        }
+
+        if (typeof value === "object") {
+            const maybe_is_empty = (value as { is_empty?: () => boolean }).is_empty;
+
+            if (typeof maybe_is_empty === "function") {
+                return Reflect.apply(maybe_is_empty, value, []);
+            }
+
+            return Object.keys(value).length == 0;
+        }
+
+        return false;
+    }
+
     make_literal_value(value: GodotJsb.editor.DefaultArgumentInfo) {
         // plain types
         const type_name = VariantTypeNames.get(value.type);
@@ -3270,11 +3309,10 @@ export class TypeDB {
             case godot.Variant.Type.TYPE_NODE_PATH:
                 return value.value == null ? "''" : `'${gd_to_string(value.value)}'`;
             case godot.Variant.Type.TYPE_ARRAY:
-                return value.value == null || value.value.is_empty() ? "[]" : `${gd_to_string(value.value)}`;
             case godot.Variant.Type.TYPE_OBJECT:
-                return value.value == null ? "undefined" : "<any> {}";
+                return null;
             case godot.Variant.Type.TYPE_NIL:
-                return "<any> {}";
+                return "{}";
             case godot.Variant.Type.TYPE_CALLABLE:
             case godot.Variant.Type.TYPE_RID:
                 return `new ${type_name}()`;
@@ -3311,31 +3349,38 @@ export class TypeDB {
             value.type >= godot.Variant.Type.TYPE_PACKED_BYTE_ARRAY &&
             value.type <= godot.Variant.Type.TYPE_PACKED_COLOR_ARRAY
         ) {
-            if (value.value == null || value.value.is_empty()) {
+            if (this.is_empty_default_value(value.value)) {
                 return "[]";
             }
         }
         if (value.type == godot.Variant.Type.TYPE_DICTIONARY) {
-            if (value.value == null || value.value.is_empty()) return `new ${type_name}()`;
+            if (this.is_empty_default_value(value.value)) {
+                return `new ${type_name}()`;
+            }
         }
         //NOTE hope all default value for Transform2D/Transform3D is IDENTITY
         if (value.type == godot.Variant.Type.TYPE_TRANSFORM2D || value.type == godot.Variant.Type.TYPE_TRANSFORM3D) {
             return `new ${type_name}()`;
         }
 
-        //TODO value sig for compound types
-        return `<any> {} /*compound.type from ${godot.Variant.Type[value.type]} (${value.value})*/`;
+        return null;
     }
 
     make_arg_default_value(method_info: GodotJsb.editor.MethodBind, index: number): string {
         const default_arguments = method_info.default_arguments || [];
         const def_index = index - (method_info.args_.length - default_arguments.length);
-        if (def_index < 0 || def_index >= default_arguments.length) return this.make_arg(method_info.args_[index]);
-        return `${this.make_arg(method_info.args_[index], true)} /* = ${this.make_literal_value(default_arguments[def_index])} */`;
+
+        if (def_index < 0 || def_index >= default_arguments.length) {
+            return this.make_arg(method_info.args_[index]);
+        }
+
+        const default_argument = default_arguments[def_index];
+        const arg_text = this.make_arg(method_info.args_[index], true);
+        const default_text = this.make_literal_value(default_argument);
+        return default_text ? `${arg_text} /* = ${default_text} */` : arg_text;
     }
 
     make_args(method_info: GodotJsb.editor.MethodBind): string {
-        //TODO consider default arguments
         const varargs = "...varargs: any[]";
         const is_vararg = !!(method_info.hint_flags & godot.MethodFlags.METHOD_FLAG_VARARG);
         if (method_info.args_.length == 0) {
@@ -3373,9 +3418,9 @@ export class TSDCodeGen {
     private _types: TypeDB;
     private _use_project_settings: boolean;
 
-    constructor(outDir: string, use_project_settings: boolean) {
+    constructor(out_dir: string, use_project_settings: boolean) {
         this._split_index = 0;
-        this._out_dir = outDir;
+        this._out_dir = out_dir;
         this._use_project_settings = use_project_settings;
         this._types = new TypeDB();
     }
@@ -3396,7 +3441,6 @@ export class TSDCodeGen {
             this._splitter.close();
         }
         const filename = this.make_path(this._split_index++);
-        console.log("new writer", filename);
         this._splitter = new FileSplitter(this._types, filename);
         return this._splitter;
     }
@@ -3431,10 +3475,14 @@ export class TSDCodeGen {
         return typeof name === "string" && typeof this._types.classes[name] !== "undefined";
     }
 
-    async emit(showToast: boolean = true) {
+    async emit(skip_static_types = false) {
         await frame_step();
 
         const tasks = new CodegenTasks("Generating godot.d.ts");
+
+        if (!skip_static_types) {
+            tasks.add_task("Static Types", () => jsb.editor.install_static_types());
+        }
 
         // aliases
         tasks.add_task("Aliases", () => this.emit_aliases());
@@ -3515,7 +3563,7 @@ export class TSDCodeGen {
             this.cleanup();
         });
 
-        return tasks.submit(showToast);
+        return tasks.submit();
     }
 
     private emit_utility(utility_func: GodotJsb.editor.MethodBind) {
@@ -3528,6 +3576,13 @@ export class TSDCodeGen {
     private emit_global(global_obj: GodotJsb.editor.GlobalConstantInfo) {
         const cg = this.split();
         const doc = this._types.find_doc("@GlobalScope");
+
+        if (typeof global_obj.value !== "undefined") {
+            DocCommentHelper.write(cg, doc?.constants[global_obj.name]?.description, true);
+            cg.line(`const ${name_string(global_obj.name)} = ${global_obj.value}`);
+            return;
+        }
+
         const ns = cg.enum_(global_obj.name);
         let separator_line = false;
         for (let name in global_obj.values) {
@@ -3537,6 +3592,10 @@ export class TSDCodeGen {
         }
         ns.finish();
     }
+
+	private emit_static_dts() {
+
+	}
 
     private emit_aliases() {
         const cg = this.split();
@@ -3585,11 +3644,8 @@ export class TSDCodeGen {
             for (let enum_info of cls.enums) {
                 const enum_cg = class_ns_cg.enum_(enum_info.name);
                 for (let [name, value] of Object.entries(enum_info.literals)) {
-                    const constant = cls.constants!.find((v) => v.name == name);
                     enum_cg.element_(name, value);
-                    if (constant) {
-                        ignored_consts.add(name);
-                    }
+                    ignored_consts.add(name);
                 }
                 enum_cg.finish();
             }
@@ -3672,7 +3728,7 @@ export class TSDCodeGen {
             );
             if (cls.constants) {
                 for (let constant of cls.constants) {
-                    if (!ignored_consts.has(constant.name)) {
+                    if (!ignored_consts.has(constant.name) && !ignored_consts.has(names.get_enum_value(constant.name))) {
                         class_cg.constant_(constant);
                     }
                 }
@@ -3711,6 +3767,25 @@ export class TSDCodeGen {
                     }
                 }
             }
+
+            const rpc_interface_name = `__RPCMap${cls.name}`;
+            const rpc_interface_writer = cg.interface_(rpc_interface_name, undefined, cls.super && `__RPCMap${cls.super}`);
+            const rpc_methods = cls.rpc_methods ?? [];
+            for (const method_info of rpc_methods) {
+                rpc_interface_writer.property_(
+                    method_info.name,
+                    `(${this._types.make_args(method_info)}) => ${this._types.make_return(method_info)}`,
+                );
+            }
+
+            // Not really deprecated, but we don't want people using this.
+            cg.line("/** @deprecated Internal use. Does not exist at runtime. */");
+            rpc_interface_writer.finish();
+
+            const godot_rpc_map_writer = class_cg.property_("__godotRPCMap");
+            godot_rpc_map_writer.line(rpc_interface_name);
+            class_cg.line("/** @deprecated Internal use. Does not exist at runtime. */");
+            godot_rpc_map_writer.finish();
 
             const overrides_interface_name = `__NameMap${cls.name}`;
             const overrides_interface_writer = cg.interface_(
@@ -3783,7 +3858,7 @@ export class SceneTSDCodeGen {
             tasks.add_task(`Generating scene node types: ${scene_path}`, () => this.emit_scene_node_types(scene_path));
         }
 
-        return tasks.submit(false);
+        return tasks.submit();
     }
 
     private emit_children_node_types(writer: ScopeWriter, children: GReadProxyValueWrap<NodeTypeDescriptorPathMap>) {
@@ -3848,12 +3923,22 @@ export class SceneTSDCodeGen {
 export class ResourceTSDCodeGen {
     private _out_dir: string;
     private _resource_paths: string[];
+    private _script_extensions: string[];
     private _types: TypeDB;
 
     constructor(out_dir: string, resource_paths: string[]) {
         this._out_dir = out_dir;
         this._resource_paths = resource_paths;
 
+        const recognized_extensions = godot.ResourceLoader.get_recognized_extensions_for_type("Script");
+        const length = recognized_extensions.size();
+        const script_extensions = new Array<string>(length);
+
+        for (let i = 0; i < length; i++) {
+            script_extensions[i] = recognized_extensions.get(i);
+        }
+
+        this._script_extensions = script_extensions;
         this._types = new TypeDB();
     }
 
@@ -3878,7 +3963,71 @@ export class ResourceTSDCodeGen {
             tasks.add_task(`Generating resource type: ${resource_path}`, () => this.emit_resource_type(resource_path));
         }
 
-        return tasks.submit(false);
+        return tasks.submit();
+    }
+
+    private get_script_rpc_info(resource_path: string): null | { class_name: string; methods: string[] } {
+        const extension = resource_path.slice(resource_path.lastIndexOf('.') + 1);
+
+        if (!this._script_extensions.includes(extension)) {
+            return null;
+        }
+
+        const resource_loader = godot.ResourceLoader;
+
+        let script: unknown;
+
+        try {
+            script = resource_loader.load(resource_path);
+        } catch (e) {
+            console.warn(`Failed to generate RPC types for script: ${resource_path}`, e);
+            return null;
+        }
+
+        if (!(script instanceof godot.Script)) {
+            return null;
+        }
+
+        const class_name = script.get_global_name();
+        const rpc_config = script.get_rpc_config();
+        const methods = [...rpc_config.keys()].filter(name => name).sort();
+
+        if (methods.length === 0) {
+            return null;
+        }
+
+        return { class_name, methods };
+    }
+
+    private emit_script_rpc_types(module: ModuleWriter, resource_path: string) {
+        const script_rpc_info = this.get_script_rpc_info(resource_path);
+
+        if (!script_rpc_info) {
+            return;
+        }
+
+        module.add_import(script_rpc_info.class_name, resource_path);
+
+        const imported_class_name = module.get_imports()[resource_path]?.default ?? script_rpc_info.class_name;
+
+        const rpc_entries_interface = module.interface_(names.get_class("GodotUserRPCEntries"));
+        const entry_property = rpc_entries_interface.property_(resource_path);
+        const entry_writer = entry_property.object_();
+        entry_writer.property_("type", imported_class_name);
+
+        const rpc_map_property = entry_writer.property_("procedures");
+        const rpc_map_writer = rpc_map_property.object_();
+
+        for (const method_name of script_rpc_info.methods) {
+            rpc_map_writer.property_(method_name, `${imported_class_name}[${JSON.stringify(method_name)}]`);
+        }
+
+        rpc_map_writer.finish();
+        rpc_map_property.finish();
+
+        entry_writer.finish();
+        entry_property.finish();
+        rpc_entries_interface.finish();
     }
 
     private emit_resource_type(resource_path: string) {
@@ -3916,6 +4065,9 @@ export class ResourceTSDCodeGen {
                 type_descriptor.finish();
                 resource_property.finish();
                 resource_types_interface.finish();
+
+                this.emit_script_rpc_types(module, resource_path);
+
                 module.finish();
                 file_writer.finish();
             } finally {

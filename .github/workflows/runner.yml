@@ -34,32 +34,35 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - version: 4.4
-            version_ref: 4.4
-          - version: 4.5
-            version_ref: 4.5
+          - version: 4.6.1
+            version_mm: 4.6
+            version_ref: 4.6.1-stable
+#          - version: 4.7dev
+#            version_mm: 4.7
+#            version_ref: master
     uses: ./.github/workflows/build_engine_version.yml
     with:
       version: ${{ matrix.version }}
+      version_mm: ${{ matrix.version_mm }}
       version_ref: ${{ matrix.version_ref }}
       release: ${{ github.event_name == 'release' }}
 
-  test-project:
-    name: 🔬 Test project
+  runtime-matrix:
+    name: 🧪 Runtime matrix
     needs: [engine-version-build]
-    uses: ./.github/workflows/test_project.yml
+    uses: ./.github/workflows/test_runtime_matrix.yml
     strategy:
       fail-fast: false
       matrix:
         include:
-          - version: 4.4
-          - version: 4.5
+          - version: 4.6.1
+#          - version: 4.7dev
     with:
       version: ${{ matrix.version }}
 
   builds-done:
     name: 🏁 Builds Done
-    needs: [test-project]
+    needs: [runtime-matrix]
     runs-on: ubuntu-latest
     steps:
       - name: 🏁 Check if all builds are done
@@ -76,7 +79,8 @@ jobs:
     uses: ./.github/workflows/misc_release.yml
     secrets: inherit
     with:
-      versions: '4.4, 4.5'
+      versions: '4.6.1'
+#      versions: '4.6.1, 4.7'
 
   upload-assets:
     name: 📁 Upload Assets
@@ -90,7 +94,7 @@ jobs:
       fail-fast: true
       matrix:
         include:
-          - version: 4.4
-          - version: 4.5
+          - version: 4.6.1
+#          - version: 4.7dev
     with:
       version: ${{ matrix.version }}

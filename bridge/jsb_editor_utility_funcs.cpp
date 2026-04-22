@@ -1,5 +1,17 @@
 #include "jsb_editor_utility_funcs.h"
 #include "jsb_type_convert.h"
+#include "jsb_environment.h"
+#include "../internal/jsb_class_util.h"
+#include "core/object/script_language.h"
+#if JSB_WITH_EDITOR_UTILITY_FUNCS
+#include "modules/GodotJS/weaver-editor/jsb_editor_plugin.h"
+#endif
+
+#if GODOT_4_6_OR_NEWER
+using ConstantHashMap = AHashMap<StringName, int64_t>;
+#else
+using ConstantHashMap = HashMap<StringName, int64_t>;
+#endif
 
 #if JSB_WITH_EDITOR_UTILITY_FUNCS
 namespace jsb_private
@@ -318,7 +330,7 @@ namespace jsb
             set_field(isolate, context, object, JSB_GET_FIELD_NAME_PRESET(enum_info, is_bitfield));
         }
 
-        void build_enum_info(v8::Isolate* isolate, const v8::Local<v8::Context>& context, const HashMap<StringName, int64_t>& constants, const StringName &enum_name, const ClassDB::ClassInfo::EnumInfo& enum_info, const v8::Local<v8::Object>& object)
+        void build_enum_info(v8::Isolate* isolate, const v8::Local<v8::Context>& context, const ConstantHashMap& constants, const StringName &enum_name, const ClassDB::ClassInfo::EnumInfo& enum_info, const v8::Local<v8::Object>& object)
         {
             v8::Local<v8::Object> values_object = v8::Object::New(isolate);
             int index = 0;
@@ -340,7 +352,7 @@ namespace jsb
             set_field(isolate, context, signal_obj, "method_", method_obj);
         }
 
-        v8::Local<v8::Object> build_class_info(v8::Isolate* isolate, const v8::Local<v8::Context>& context, const StringName& class_name)
+        v8::Local<v8::Object> build_class_info(v8::Isolate* isolate, const v8::Local<v8::Context>& context, const StringName& class_name, const HashSet<StringName>* class_rpc_methods)
         {
             v8::Local<v8::Object> class_info_obj = v8::Object::New(isolate);
             const HashMap<StringName, ClassDB::ClassInfo>::Iterator class_it = ClassDB::classes.find(class_name);
@@ -414,6 +426,41 @@ namespace jsb
                 }
             }
 
+            // class: rpc methods
+            {
+                JSB_HANDLE_SCOPE(isolate);
+
+                v8::Local<v8::Array> rpc_methods_obj = v8::Array::New(isolate);
+                set_field(isolate, context, class_info_obj, "rpc_methods", rpc_methods_obj);
+
+                if (class_rpc_methods)
+                {
+                    int index = 0;
+
+                    for (const KeyValue<StringName, MethodBind*>& pair : class_info.method_map)
+                    {
+                        MethodBind const * const method_bind = pair.value;
+
+                        if (method_bind->is_static())
+                        {
+                            continue;
+                        }
+
+                        const StringName exposed_method_name = internal::NamingUtil::get_member_name(pair.key);
+
+                        if (!class_rpc_methods->has(pair.key) && !class_rpc_methods->has(exposed_method_name))
+                        {
+                            continue;
+                        }
+
+                        JSB_HANDLE_SCOPE(isolate);
+                        v8::Local<v8::Object> method_info_obj = v8::Object::New(isolate);
+                        build_method_info(isolate, context, method_bind, method_info_obj);
+                        rpc_methods_obj->Set(context, index++, method_info_obj).Check();
+                    }
+                }
+            }
+
             // class: gd virtual methods
             {
                 JSB_HANDLE_SCOPE(isolate);
@@ -438,7 +485,7 @@ namespace jsb
                 v8::Local<v8::Array> enums_obj = v8::Array::New(isolate, (int) class_info.enum_map.size());
                 set_field(isolate, context, class_info_obj, "enums", enums_obj);
                 int index = 0;
-                HashMap<StringName, int64_t> constants = class_info.constant_map;
+                const ConstantHashMap& constants = class_info.constant_map;
                 for (const KeyValue<StringName, ClassDB::ClassInfo::EnumInfo>& pair : class_info.enum_map)
                 {
                     JSB_HANDLE_SCOPE(isolate);
@@ -930,15 +977,33 @@ namespace jsb
 
         v8::HandleScope handle_scope(isolate);
         v8::Local<v8::Context> context = isolate->GetCurrentContext();
+        Environment* environment = Environment::wrap(isolate);
 
         List<StringName> exposed_class_list = internal::NamingUtil::get_exposed_original_class_list();
+        HashMap<StringName, HashSet<StringName>> rpc_method_map;
+
+        for (auto& script_class_info : environment->get_script_classes())
+        {
+            if (script_class_info.rpc_config.is_empty())
+            {
+                continue;
+            }
+
+            HashSet<StringName>& methods = rpc_method_map[script_class_info.js_class_name];
+
+            for (const auto& pair : script_class_info.rpc_config)
+            {
+                methods.insert(pair.key);
+            }
+        }
+
         v8::Local<v8::Array> array = v8::Array::New(isolate, exposed_class_list.size());
         int index = 0;
 
-        for (auto it = exposed_class_list.begin(); it != exposed_class_list.end(); ++it)
+        for (auto& class_name : exposed_class_list)
         {
             JSB_HANDLE_SCOPE(isolate);
-            array->Set(context, index++, build_class_info(isolate, context, *it)).Check();
+            array->Set(context, index++, build_class_info(isolate, context, class_name, rpc_method_map.getptr(class_name))).Check();
         }
 
         info.GetReturnValue().Set(array);
@@ -957,6 +1022,17 @@ namespace jsb
         for (int index = 0; index < num; ++index)
         {
             const StringName enum_name = CoreConstants::get_global_constant_enum(index);
+            if (enum_name.is_empty() || !CoreConstants::is_global_enum(enum_name))
+            {
+                JSB_HANDLE_SCOPE(isolate);
+                v8::Local<v8::Object> constant_obj = v8::Object::New(isolate);
+                const StringName constant_name = CoreConstants::get_global_constant_name(index);
+                const int64_t constant_value = CoreConstants::get_global_constant_value(index);
+                set_field(isolate, context, constant_obj, "name", internal::NamingUtil::get_enum_value_name(constant_name));
+                set_field(isolate, context, constant_obj, "value", constant_value);
+                array->Set(context, array_index++, constant_obj).Check();
+                continue;
+            }
             if (enum_packs.has(enum_name))
             {
                 continue;
@@ -1097,6 +1173,165 @@ namespace jsb
         internal::PathUtil::delete_file(impl::Helper::to_string(isolate, info[0]));
     }
 
+    static void _install_project_files(const v8::FunctionCallbackInfo<v8::Value>& info)
+    {
+        v8::Isolate* isolate = info.GetIsolate();
+        GodotJSEditorPlugin* editor_plugin = GodotJSEditorPlugin::get_singleton();
+
+        if (editor_plugin == nullptr)
+        {
+            jsb_throw(isolate, "editor plugin unavailable");
+            return;
+        }
+
+        v8::HandleScope handle_scope(isolate);
+
+        auto context = isolate->GetCurrentContext();
+        auto result = v8::Promise::Resolver::New(context);
+
+        if (result.IsEmpty())
+        {
+            jsb_throw(isolate, "Failed to setup promise");
+            return;
+        }
+
+        auto resolver = result.ToLocalChecked();
+
+        bool force = info.Length() >= 0 && info[0]->IsBoolean() && info[0].As<v8::Boolean>()->Value();
+        editor_plugin->try_install_project_files([&](auto success)
+        {
+            if (success)
+            {
+                resolver->Resolve(context, v8::Undefined(isolate));
+            }
+            else
+            {
+                resolver->Reject(context, impl::Helper::new_string_ascii(isolate, "Failed to install project files"));
+            }
+        }, force);
+
+        info.GetReturnValue().Set(resolver->GetPromise());
+    }
+
+    static void _install_static_types(const v8::FunctionCallbackInfo<v8::Value>& info)
+    {
+        v8::Isolate* isolate = info.GetIsolate();
+        GodotJSEditorPlugin* editor_plugin = GodotJSEditorPlugin::get_singleton();
+
+        if (editor_plugin == nullptr)
+        {
+            jsb_throw(isolate, "editor plugin unavailable");
+            return;
+        }
+
+        v8::HandleScope handle_scope(isolate);
+
+        auto context = isolate->GetCurrentContext();
+        auto result = v8::Promise::Resolver::New(context);
+
+        if (result.IsEmpty())
+        {
+            jsb_throw(isolate, "Failed to setup promise");
+            return;
+        }
+
+        auto resolver = result.ToLocalChecked();
+        editor_plugin->install_static_types([&](auto success)
+        {
+            if (success)
+            {
+                resolver->Resolve(context, v8::Undefined(isolate));
+            }
+            else
+            {
+                resolver->Reject(context, impl::Helper::new_string_ascii(isolate, "Failed to install static types"));
+            }
+        });
+
+        info.GetReturnValue().Set(resolver->GetPromise());
+    }
+
+    static void _generate_types(const v8::FunctionCallbackInfo<v8::Value>& info)
+    {
+        v8::Isolate* isolate = info.GetIsolate();
+
+        GodotJSEditorPlugin* editor_plugin = GodotJSEditorPlugin::get_singleton();
+
+        if (editor_plugin == nullptr)
+        {
+            jsb_throw(isolate, "editor plugin unavailable");
+            return;
+        }
+
+        v8::HandleScope handle_scope(isolate);
+
+        auto context = isolate->GetCurrentContext();
+        auto result = v8::Promise::Resolver::New(context);
+
+        if (result.IsEmpty())
+        {
+            jsb_throw(isolate, "Failed to setup promise");
+            return;
+        }
+
+        auto resolver = result.ToLocalChecked();
+
+        bool skip_static_types = info.Length() >= 0 && info[0]->IsBoolean() && info[0].As<v8::Boolean>()->Value();
+        editor_plugin->generate_types([&](auto success)
+        {
+            if (success)
+            {
+                resolver->Resolve(context, v8::Undefined(isolate));
+            }
+            else
+            {
+                resolver->Reject(context, impl::Helper::new_string_ascii(isolate, "Failed to generate types"));
+            }
+        }, skip_static_types);
+
+        info.GetReturnValue().Set(resolver->GetPromise());
+    }
+
+    static void _cleanup_invalid_files(const v8::FunctionCallbackInfo<v8::Value>& info)
+    {
+        v8::Isolate* isolate = info.GetIsolate();
+
+        GodotJSEditorPlugin* editor_plugin = GodotJSEditorPlugin::get_singleton();
+
+        if (editor_plugin == nullptr)
+        {
+            jsb_throw(isolate, "editor plugin unavailable");
+            return;
+        }
+
+        v8::HandleScope handle_scope(isolate);
+
+        auto context = isolate->GetCurrentContext();
+        auto result = v8::Promise::Resolver::New(context);
+
+        if (result.IsEmpty())
+        {
+            jsb_throw(isolate, "Failed to setup promise");
+            return;
+        }
+
+        auto resolver = result.ToLocalChecked();
+
+        editor_plugin->cleanup_invalid_files([&](auto success)
+        {
+            if (success)
+            {
+                resolver->Resolve(context, v8::Undefined(isolate));
+            }
+            else
+            {
+                resolver->Reject(context, impl::Helper::new_string_ascii(isolate, "Failed to cleanup invalid files"));
+            }
+        });
+
+        info.GetReturnValue().Set(resolver->GetPromise());
+    }
+
     void EditorUtilityFuncs::expose(v8::Isolate* isolate, v8::Local<v8::Context> context, v8::Local<v8::Object> jsb_obj)
     {
         v8::Local<v8::Object> editor_obj = v8::Object::New(isolate);
@@ -1110,6 +1345,10 @@ namespace jsb
         editor_obj->Set(context, impl::Helper::new_string_ascii(isolate, "get_primitive_types"), JSB_NEW_FUNCTION(context, _get_primitive_types, {})).Check();
         editor_obj->Set(context, impl::Helper::new_string_ascii(isolate, "get_input_actions"), JSB_NEW_FUNCTION(context, _get_input_actions, {})).Check();
         editor_obj->Set(context, impl::Helper::new_string_ascii(isolate, "delete_file"), JSB_NEW_FUNCTION(context, _delete_file, {})).Check();
+        editor_obj->Set(context, impl::Helper::new_string_ascii(isolate, "install_project_files"), JSB_NEW_FUNCTION(context, _install_project_files, {})).Check();
+        editor_obj->Set(context, impl::Helper::new_string_ascii(isolate, "install_static_types"), JSB_NEW_FUNCTION(context, _install_static_types, {})).Check();
+        editor_obj->Set(context, impl::Helper::new_string_ascii(isolate, "generate_types"), JSB_NEW_FUNCTION(context, _generate_types, {})).Check();
+        editor_obj->Set(context, impl::Helper::new_string_ascii(isolate, "cleanup_invalid_files"), JSB_NEW_FUNCTION(context, _cleanup_invalid_files, {})).Check();
 #ifdef GODOT_VERSION_DOCS_URL // 4.5+ or GDExtension
         editor_obj->Set(context, impl::Helper::new_string_ascii(isolate, "VERSION_DOCS_URL"), impl::Helper::new_string(isolate, GODOT_VERSION_DOCS_URL)).Check();
 #else
@@ -1120,9 +1359,33 @@ namespace jsb
 #else
 namespace jsb
 {
+    namespace
+    {
+        static void _editor_only(const v8::FunctionCallbackInfo<v8::Value>& info)
+        {
+            jsb_throw(info.GetIsolate(), "jsb.editor methods are only available in editor builds");
+        }
+    }
+
     void EditorUtilityFuncs::expose(v8::Isolate* isolate, v8::Local<v8::Context> context, v8::Local<v8::Object> jsb_obj)
     {
+        v8::Local<v8::Object> editor_obj = v8::Object::New(isolate);
+        v8::Local<v8::Function> editor_only = JSB_NEW_FUNCTION(context, _editor_only, {});
+
+        jsb_obj->Set(context, impl::Helper::new_string_ascii(isolate, "editor"), editor_obj).Check();
+        editor_obj->Set(context, impl::Helper::new_string_ascii(isolate, "get_class_doc"), editor_only).Check();
+        editor_obj->Set(context, impl::Helper::new_string_ascii(isolate, "get_classes"), editor_only).Check();
+        editor_obj->Set(context, impl::Helper::new_string_ascii(isolate, "get_global_constants"), editor_only).Check();
+        editor_obj->Set(context, impl::Helper::new_string_ascii(isolate, "get_singletons"), editor_only).Check();
+        editor_obj->Set(context, impl::Helper::new_string_ascii(isolate, "get_utility_functions"), editor_only).Check();
+        editor_obj->Set(context, impl::Helper::new_string_ascii(isolate, "get_primitive_types"), editor_only).Check();
+        editor_obj->Set(context, impl::Helper::new_string_ascii(isolate, "get_input_actions"), editor_only).Check();
+        editor_obj->Set(context, impl::Helper::new_string_ascii(isolate, "delete_file"), editor_only).Check();
+        editor_obj->Set(context, impl::Helper::new_string_ascii(isolate, "install_project_files"), editor_only).Check();
+        editor_obj->Set(context, impl::Helper::new_string_ascii(isolate, "install_static_types"), editor_only).Check();
+        editor_obj->Set(context, impl::Helper::new_string_ascii(isolate, "generate_types"), editor_only).Check();
+        editor_obj->Set(context, impl::Helper::new_string_ascii(isolate, "cleanup_invalid_files"), editor_only).Check();
+        editor_obj->Set(context, impl::Helper::new_string_ascii(isolate, "VERSION_DOCS_URL"), impl::Helper::new_string_ascii(isolate, "")).Check();
     }
 }
 #endif // endif JSB_WITH_EDITOR_UTILITY_FUNCS
-

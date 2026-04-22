@@ -174,7 +174,9 @@ public:
     virtual void get_string_delimiters(List<String>* p_delimiters) const override;
 #endif
 
+#if !GODOT_4_7_OR_NEWER
     virtual Script* create_script() const override;
+#endif
     virtual bool validate(const String& p_script, const String& p_path = "", List<String>* r_functions = nullptr, List<ScriptError>* r_errors = nullptr, List<Warning>* r_warnings = nullptr, HashSet<int>* r_safe_lines = nullptr) const override;
     virtual Ref<Script> make_template(const String& p_template, const String& p_class_name, const String& p_base_class_name) const override;
     virtual void reload_all_scripts() override;
@@ -198,9 +200,11 @@ public:
 #endif
 
     virtual bool is_using_templates() override { return true; }
+#if !GODOT_4_6_OR_NEWER
 #ifndef DISABLE_DEPRECATED
     virtual bool has_named_classes() const override { return false; }
 #endif // DISABLE_DEPRECATED
+#endif // !GODOT_4_6_OR_NEWER
     virtual bool supports_builtin_mode() const override { return false; }
 
     virtual int find_function(const String& p_function, const String& p_code) const override { return -1; }

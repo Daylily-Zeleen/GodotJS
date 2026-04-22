@@ -5,6 +5,7 @@
     "build": "tsc"
   },
   "devDependencies": {
-    "typescript": "^5.9.2"
+    "@types/emscripten": "^1.41.5",
+    "typescript": "^6.0.3"
   }
 }

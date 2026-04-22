@@ -8,6 +8,9 @@ on:
       version:
         required: true
         type: string
+      version_mm:
+        required: true
+        type: string
       version_ref:
         description: "Godot engine commit reference"
         required: true
@@ -15,11 +18,6 @@ on:
 
 # Global Settings
 env:
-  # 4.4
-  SCONSFLAGS: >-
-    debug_symbols=no
-    module_text_server_fb_enabled=yes
-  # 4.5+
   # Ideally we'd use dev_mode=yes. Unfortunately, v8 headers contain warnings. So we manually set some dev_mode options.
   SCONS_FLAGS: >-
     verbose=yes
@@ -28,6 +26,7 @@ env:
     module_text_server_fb_enabled=yes
     tests=no
     debug_symbols=no
+    skip_js_runtime=yes
 
 jobs:
   ios-template:
@@ -37,24 +36,26 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # JSC isn't working at the moment
-        #        engine: [ v8, qjs-ng, jsc ]
-        engine: [ v8, qjs-ng ]
+        engine: [ v8, qjs-ng, jsc ]
         target: ${{ inputs.release && fromJSON('["template_release","template_debug"]') || fromJSON('["template_debug"]') }}
     steps:
       - name: Checkout Godot
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: godotengine/godot
           ref: ${{ inputs.version_ref }}
           submodules: recursive
 
       - name: Checkout GodotJS
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           path: ${{github.workspace}}/modules/GodotJS/
           lfs: true
           submodules: recursive
+
+      # From https://github.com/actions/runner-images/blob/main/images/macos
+      - name: Select Xcode 26
+        run: sudo xcode-select -s /Applications/Xcode_26.0.1.app
 
       - name: Restore Godot build cache
         uses: ./.github/actions/godot-cache-restore
@@ -63,7 +64,7 @@ jobs:
           cache-name: ios-${{ matrix.target }}-${{inputs.version}}-${{ matrix.engine }}
 
       - name: Download scripts/out
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: scripts-out
           path: ${{github.workspace}}/modules/GodotJS/scripts/out
@@ -71,24 +72,13 @@ jobs:
       - name: Setup Python and SCons
         uses: ./.github/actions/godot-deps
 
-      - name: Compilation [4.4]
-        if: inputs.version == '4.4'
-        uses: ./.github/actions/godot-build
-        with:
-          sconsflags: >-
-            ${{ env.SCONSFLAGS }}             
-            ${{ matrix.engine == 'qjs-ng' && 'use_quickjs_ng=yes' || '' }}
-          platform: ios
-          target: ${{ matrix.target }}
-          scons-cache-limit: 1
-
-      - name: Compilation [4.5+]
-        if: inputs.version != '4.4'
+      - name: Compilation
         uses: ./.github/actions/godot-build
         with:
           scons-flags: >-
-            ${{ env.SCONS_FLAGS }}             
+            ${{ env.SCONS_FLAGS }}
             ${{ matrix.engine == 'qjs-ng' && 'use_quickjs_ng=yes' || '' }}
+            ${{ matrix.engine == 'jsc' && 'use_jsc=yes' || '' }}
           platform: ios
           target: ${{ matrix.target }}
 

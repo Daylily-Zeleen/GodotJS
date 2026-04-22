@@ -2,11 +2,15 @@
 #include "jsb_docked_panel.h"
 #include "jsb_export_plugin.h"
 
+#if GODOT_4_7_OR_NEWER
+#include "core/object/callable_mp.h"
+#endif
+
 #define JSB_TYPE_ROOT "typings"
 
 enum
 {
-    MENU_ID_INSTALL_TS_PROJECT,
+    MENU_ID_INSTALL_PROJECT_FILES,
     MENU_ID_GENERATE_TYPES,
     MENU_ID_CLEANUP_INVALID_FILES,
 };
@@ -18,7 +22,6 @@ namespace
 
 void GodotJSEditorPlugin::_bind_methods()
 {
-
 }
 
 jsb::internal::PresetSource GodotJSEditorPlugin::get_preset_source(const String& p_filename)
@@ -47,21 +50,48 @@ void GodotJSEditorPlugin::_notification(int p_what)
     case NOTIFICATION_READY:
         singleton_ = this;
         // stupid self watching, but there is no other way which work both in module and gdextension
-    	// EditorPlugin::notify_scene_saved() is not virtual, and not exposed to gdextension :(
+        // EditorPlugin::notify_scene_saved() is not virtual, and not exposed to gdextension :(
         connect("scene_saved", callable_mp(this, &GodotJSEditorPlugin::_on_scene_saved));
         connect("resource_saved", callable_mp(this, &GodotJSEditorPlugin::_on_resource_saved));
         EditorFileSystem::get_singleton()->connect("resources_reimported", callable_mp(this, &GodotJSEditorPlugin::_generate_imported_resource_dts));
+
+        if (OS::get_singleton()->get_cmdline_args().find("--generate-types") != nullptr)
+        {
+            // Delay until idle so the editor plugin and JS runtime are fully entered.
+            callable_mp(this, &GodotJSEditorPlugin::_generate_types_from_cmdline).call_deferred();
+        }
+
         break;
     default: break;
     }
+}
+
+void GodotJSEditorPlugin::_generate_types_from_cmdline()
+{
+    generate_types([](auto success)
+    {
+        if (success)
+        {
+            JSB_LOG(Log, "Type generation complete.");
+        }
+        else
+        {
+            JSB_LOG(Error, "Type generation failed.");
+        }
+
+        if (DisplayServer::get_singleton()->get_name() == "headless")
+        {
+            SceneTree::get_singleton()->quit(success ? 0 : -1);
+        }
+    });
 }
 
 void GodotJSEditorPlugin::_on_menu_pressed(int p_what)
 {
     switch (p_what)
     {
-    case MENU_ID_INSTALL_TS_PROJECT: try_install_ts_project(); break;
-    case MENU_ID_GENERATE_TYPES: generate_godot_dts(); break;
+    case MENU_ID_INSTALL_PROJECT_FILES: try_install_project_files(); break;
+    case MENU_ID_GENERATE_TYPES: generate_types(); break;
     case MENU_ID_CLEANUP_INVALID_FILES: cleanup_invalid_files(); break;
     default: break;
     }
@@ -75,7 +105,7 @@ GodotJSEditorPlugin::GodotJSEditorPlugin()
     // jsb::internal::Settings::on_editor_init();
     PopupMenu *menu = memnew(PopupMenu);
     add_tool_submenu_item(TTR("GodotJS"), menu);
-    menu->add_item(TTR("Install Preset Files"), MENU_ID_INSTALL_TS_PROJECT);
+    menu->add_item(TTR("Install Project Files"), MENU_ID_INSTALL_PROJECT_FILES);
     menu->add_item(TTR("Generate Types"), MENU_ID_GENERATE_TYPES);
     menu->add_separator();
     menu->add_item(TTR("Cleanup Invalid Files"), MENU_ID_CLEANUP_INVALID_FILES);
@@ -103,7 +133,7 @@ GodotJSEditorPlugin::GodotJSEditorPlugin()
     // VSCode treats the directory containing the jsconfig.json file as the root of a javascript project, and reads type declarations from d.ts.
     add_install_file({ "godot.minimal.d.ts", "res://" JSB_TYPE_ROOT, jsb::weaver::CH_TYPESCRIPT | jsb::weaver::CH_D_TS });
     add_install_file({ "godot.mix.d.ts", "res://" JSB_TYPE_ROOT, jsb::weaver::CH_TYPESCRIPT | jsb::weaver::CH_D_TS });
-#if !JSB_WITH_WEB && !JSB_WITH_JAVASCRIPTCORE
+#if !JSB_WITH_WEB
     add_install_file({ "godot.worker.d.ts", "res://" JSB_TYPE_ROOT, jsb::weaver::CH_TYPESCRIPT | jsb::weaver::CH_D_TS });
 #endif
     add_install_file({ "jsb.editor.bundle.d.ts", "res://" JSB_TYPE_ROOT, jsb::weaver::CH_TYPESCRIPT | jsb::weaver::CH_D_TS });
@@ -148,9 +178,15 @@ bool GodotJSEditorPlugin::delete_file(const String &p_file)
 
 String GodotJSEditorPlugin::mutate_types(const String& p_content)
 {
+    auto should_ignore_identifier = [](const String& p_identifier) -> bool
+    {
+        // Internal utility types are double underscore prefixed
+        return p_identifier.begins_with("__");
+    };
+
     // Regex obviously isn't the best tool for the job and this regex will, for example, match some generic parameter
     // names. However, for now, it does the job.
-    RegEx type_regex("(?m)(?:=>|[:|&<=,{]|\\s+(?:type|enum|extends)\\s+|\\s+(?:class|interface)(?:<[^>]+>)?\\s+)\\s*([A-Z]\\w+)(?:\\.([A-Z]\\w+))*");
+    RegEx type_regex("(?m)(?:=>|[:|&<=,{\\[]|\\b(?:type|enum|extends|keyof|infer|typeof|implements|as|is|in|satisfies)\\s+|\\s+(?:class|interface)(?:<[^>]+>)?\\s+)\\s*([A-Z]\\w+)(?:\\.([A-Z]\\w+))*");
     TypedArray<RegExMatch> type_matches = type_regex.search_all(p_content);
     String result = p_content;
     for (int match_index = type_matches.size() - 1; match_index >= 0; match_index--)
@@ -174,11 +210,20 @@ String GodotJSEditorPlugin::mutate_types(const String& p_content)
                 String component = components[i];
                 start = end - component.length();
                 identifier = result.substr(start, end - start);
+
+                if (should_ignore_identifier(identifier))
+                {
+                    end = start - 1;
+                    continue;
+                }
+
                 replacement = jsb::internal::NamingUtil::get_class_name(identifier);
+
                 if (replacement != identifier)
                 {
                     result = result.substr(0, start) + replacement + result.substr(end);
                 }
+
                 end = start - 1;
             }
         }
@@ -186,10 +231,79 @@ String GodotJSEditorPlugin::mutate_types(const String& p_content)
         start = match->get_start(1);
         end = match->get_end(1);
         identifier = result.substr(start, end - start);
+
+        if (should_ignore_identifier(identifier))
+        {
+            continue;
+        }
+
         replacement = jsb::internal::NamingUtil::get_class_name(identifier);
         if (replacement != identifier && identifier != "Array") // Godot Array is already GArray, Array is the JS type.
         {
             result = result.substr(0, start) + replacement + result.substr(end);
+        }
+    }
+
+    RegEx function_regex("(?m)\\b(?!(?:if|for|while|switch|catch|return|new|super|this)\\b)([a-zA-Z_]\\w*)\\s*(?:<[^>]+>)?\\s*\\(");
+    RegEx parameter_regex("(?m)\\b([a-zA-Z_]\\w*)\\s*(?:\\?|)\\s*:");
+    TypedArray<RegExMatch> func_matches = function_regex.search_all(result);
+    for (int match_index = func_matches.size() - 1; match_index >= 0; match_index--)
+    {
+        Ref<RegExMatch> func_match = func_matches[match_index];
+
+        int func_name_start = func_match->get_start(1);
+        int func_name_end = func_match->get_end(1);
+        String func_identifier = result.substr(func_name_start, func_name_end - func_name_start);
+
+        int param_list_start = func_match->get_end(0);
+        int param_list_end = param_list_start;
+        int depth = 1;
+
+        for (int i = param_list_start; i < result.length(); i++)
+        {
+            if (result[i] == '(') depth++;
+            else if (result[i] == ')') depth--;
+
+            if (depth == 0)
+            {
+                param_list_end = i;
+                break;
+            }
+        }
+
+        if (depth == 0 && param_list_end > param_list_start)
+        {
+            String param_str = result.substr(param_list_start, param_list_end - param_list_start);
+            TypedArray<RegExMatch> param_matches = parameter_regex.search_all(param_str);
+
+            for (int p_index = param_matches.size() - 1; p_index >= 0; p_index--)
+            {
+                Ref<RegExMatch> p_match = param_matches[p_index];
+
+                int p_start = param_list_start + p_match->get_start(1);
+                int p_end = param_list_start + p_match->get_end(1);
+                String p_identifier = result.substr(p_start, p_end - p_start);
+
+                if (should_ignore_identifier(p_identifier))
+                {
+                    continue;
+                }
+
+                String p_replacement = jsb::internal::NamingUtil::get_parameter_name(p_identifier);
+                if (p_replacement != p_identifier)
+                {
+                    result = result.substr(0, p_start) + p_replacement + result.substr(p_end);
+                }
+            }
+        }
+
+        if (!should_ignore_identifier(func_identifier))
+        {
+            String func_replacement = jsb::internal::NamingUtil::get_member_name(func_identifier);
+            if (func_replacement != func_identifier)
+            {
+                result = result.substr(0, func_name_start) + func_replacement + result.substr(func_name_end);
+            }
         }
     }
 
@@ -216,7 +330,8 @@ Error GodotJSEditorPlugin::apply_file(const jsb::weaver::InstallFileInfo &p_file
     }
     Error err;
     size_t size;
-    const char* data = get_preset_source(p_file.source_name).get_data(size);
+    jsb::internal::PresetSource preset = get_preset_source(p_file.source_name);
+    const char* data = preset.get_data(size);
     ERR_FAIL_COND_V_MSG(size == 0 || data == nullptr, ERR_FILE_NOT_FOUND, "bad data");
     err = DirAccess::make_dir_recursive_absolute(p_file.target_dir);
     ERR_FAIL_COND_V_MSG(err != OK, err, "failed to make dir");
@@ -234,7 +349,7 @@ Error GodotJSEditorPlugin::apply_file(const jsb::weaver::InstallFileInfo &p_file
         parsed = parsed.replacen("__BUILD_INFO_FILE__", jsb::internal::Settings::get_tsbuildinfo_path());
         parsed = parsed.replacen("__SRC_DIR__", "../../../");  // locate typescripts at the project root path for better dev experience
         parsed = parsed.replacen("__NEW_LINE__", "crlf");
-        parsed = parsed.replacen("__MODULE__", "CommonJS"); // CommonJS is the only option currently supported
+        parsed = parsed.replacen("__MODULE__", "node16"); // CommonJS with sane ESM default import handling
         parsed = parsed.replacen("__TYPE_ROOTS__", String(",").join({ R"("./node_modules/@types")", "\"./" JSB_TYPE_ROOT "\"" }));
         outfile->store_string(parsed);
     }
@@ -269,32 +384,6 @@ void GodotJSEditorPlugin::remove_obsolete_files()
     delete_file("res://jsb/jsb.editor.codegen.ts");
 }
 
-void GodotJSEditorPlugin::try_install_ts_project()
-{
-    remove_obsolete_files();
-    Vector<jsb::weaver::InstallFileInfo> modified;
-    if (verify_files(install_files_, true, &modified))
-    {
-        on_successfully_installed();
-        return;
-    }
-
-    jsb_check(!modified.is_empty());
-    const String leading_symbol = "\n    - ";
-    String modified_file_list;
-    for (const jsb::weaver::InstallFileInfo& item : modified)
-    {
-        modified_file_list += leading_symbol + item.target_dir.path_join(item.source_name);
-        if ((item.hint & jsb::weaver::CH_OBSOLETE) != 0)
-        {
-            modified_file_list += " (delete)";
-        }
-    }
-    confirm_dialog_->pending_installs_ = modified;
-    confirm_dialog_->set_text(TTR("Found existing/missing files, re-installing presets will overwrite:") + modified_file_list);
-    confirm_dialog_->popup_centered();
-}
-
 bool GodotJSEditorPlugin::verify_file(const jsb::weaver::InstallFileInfo& p_file, bool p_verify_content)
 {
     //TODO skip all d.ts files during the INSTALL phase (do it in the GENERATE phase)
@@ -308,7 +397,8 @@ bool GodotJSEditorPlugin::verify_file(const jsb::weaver::InstallFileInfo& p_file
     }
 
     size_t size;
-    const char* data = get_preset_source(p_file.source_name).get_data(size);
+    jsb::internal::PresetSource preset = get_preset_source(p_file.source_name);
+    const char* data = preset.get_data(size);
     if (size == 0 || data == nullptr) return false;
     const String target_name = jsb::internal::PathUtil::combine(p_file.target_dir, p_file.source_name);
     if (!FileAccess::exists(target_name)) return false;
@@ -393,13 +483,13 @@ bool GodotJSEditorPlugin::install_files(const Vector<jsb::weaver::InstallFileInf
     return true;
 }
 
-void GodotJSEditorPlugin::install_ts_project(const Vector<jsb::weaver::InstallFileInfo>& p_files)
+void GodotJSEditorPlugin::install_project_files(std::function<void(bool)> complete, const Vector<jsb::weaver::InstallFileInfo>& p_files)
 {
     if (!install_files(p_files)) return;
-    generate_godot_dts();
     load_editor_entry_module();
     ensure_tsc_installed();
     on_successfully_installed();
+    generate_types(complete);
 }
 
 void GodotJSEditorPlugin::_ignore_node_modules()
@@ -449,32 +539,19 @@ void GodotJSEditorPlugin::collect_invalid_files(const String& p_path, Vector<Str
     }
 }
 
-void GodotJSEditorPlugin::cleanup_invalid_files()
-{
-    int deleted_num = 0;
-    Vector<String> invalid_files;
-    collect_invalid_files(invalid_files);
-    for (const String& invalid_file: invalid_files)
-    {
-        deleted_num += delete_file(invalid_file);
-        deleted_num += delete_file(invalid_file + ".map");
-    }
-    JSB_LOG(Log, "%d files are deleted", deleted_num);
-}
-
 void GodotJSEditorPlugin::_on_scene_saved(const String& p_path)
 {
     if (!jsb::internal::Settings::get_autogen_scene_dts_on_save()) return;
 
     Vector<String> paths = { p_path };
-    generate_scene_nodes_types(paths);
+    generate_scene_nodes_types({}, paths);
 
     // Curiously, the "resource_saved" signal is not emitted for scenes even though they're resources. So we implement
     // resource saved logic here too.
 
     if (!jsb::internal::Settings::get_autogen_resource_dts_on_save()) return;
 
-    generate_resource_types(paths);
+    generate_resource_types({}, paths);
 }
 
 void GodotJSEditorPlugin::_on_resource_saved(const Ref<Resource>& p_resource)
@@ -482,14 +559,14 @@ void GodotJSEditorPlugin::_on_resource_saved(const Ref<Resource>& p_resource)
     if (!jsb::internal::Settings::get_autogen_resource_dts_on_save()) return;
 
     Vector<String> paths = { p_resource->get_path() };
-    generate_resource_types(paths);
+    generate_resource_types({}, paths);
 }
 
 void GodotJSEditorPlugin::_generate_imported_resource_dts(const Vector<String>& p_resource)
 {
     if (!jsb::internal::Settings::get_autogen_resource_dts_on_save()) return;
 
-    generate_resource_types(p_resource);
+    generate_resource_types({}, p_resource);
 }
 
 bool GodotJSEditorPlugin::_is_path_matchn(const PackedStringArray& p_wildcards, const String& p_path)
@@ -548,35 +625,278 @@ Vector<String> GodotJSEditorPlugin::_filter_resource_paths(const PackedStringArr
     return filtered_paths;
 }
 
-void GodotJSEditorPlugin::generate_godot_dts()
+bool GodotJSEditorPlugin::_is_path_matchn(const PackedStringArray& p_wildcards, const String& p_path)
+{
+    for (const String& wildcard: p_wildcards)
+    {
+        if ((wildcard.contains_char('*') || wildcard.contains_char('?')) && p_path.match(wildcard))
+        {
+            return true;
+        }
+        else
+        {
+            const String& lower_case_path = p_path.to_lower();
+            String lower_case_wildcard = wildcard.to_lower();
+            if (lower_case_path == lower_case_wildcard){
+                return true; // Exact match file.
+            }
+            else
+            {
+                if (!lower_case_wildcard.ends_with("/"))
+                {
+                    // Cheat as directory.
+                    lower_case_wildcard += "/";
+                }
+
+                if (lower_case_path.begins_with(lower_case_wildcard))
+                {
+                    return true; // Match directory.
+                }
+            }
+        }
+    }
+
+    return false;
+}
+
+Vector<String> GodotJSEditorPlugin::_filter_resource_paths(const PackedStringArray& p_exclude_wildcards, const PackedStringArray& p_include_wildcards, const Vector<String>& p_paths)
+{
+    Vector<String> filtered_paths;
+    if (!p_include_wildcards.is_empty())
+    {
+        for (const String& path: p_paths)
+        {
+            if (!p_exclude_wildcards.is_empty() && _is_path_matchn(p_exclude_wildcards, path))
+            {
+                continue;
+            }
+    
+            if (_is_path_matchn(p_include_wildcards, path))
+            {
+                filtered_paths.push_back(path);
+            }
+        }
+    }
+
+    return filtered_paths;
+}
+
+void GodotJSEditorPlugin::_on_generate_completed(const v8::FunctionCallbackInfo<v8::Value>& info)
+{
+    bool success = info.Length() >= 1 && info[0]->IsBoolean() && info[0].As<v8::Boolean>()->Value();
+
+    if (!info.Data()->IsExternal())
+    {
+        JSB_LOG(Error, "_on_generate_completed called without valid External data.");
+        return;
+    }
+
+    std::function<void(bool)>* callback = static_cast<std::function<void(bool)>*>(info.Data().As<v8::External>()->Value());
+
+    if (callback != nullptr)
+    {
+        if (*callback)
+        {
+            (*callback)(success);
+        }
+
+        delete callback;
+    }
+}
+
+void GodotJSEditorPlugin::generate_types(std::function<void(bool)> complete, bool skip_static_types)
 {
     if (GodotJSEditorPlugin* editor_plugin = GodotJSEditorPlugin::get_singleton())
     {
-        install_files(filter_files(editor_plugin->install_files_, jsb::weaver::CH_D_TS));
+        if (!skip_static_types)
+        {
+            bool static_types_success = false;
+            install_static_types([&](bool success)
+            {
+                static_types_success = success;
+            });
+            if (!static_types_success)
+            {
+                if (complete)
+                {
+                    complete(false);
+                }
+                return;
+            }
+        }
 
         GodotJSScriptLanguage* lang = GodotJSScriptLanguage::get_singleton();
         jsb_check(lang);
-        Error err;
-        const bool use_project_settings = jsb::internal::Settings::get_codegen_use_project_settings();
-        const String code = jsb_format(
-            R"--((function(){const mod = require("jsb.editor.codegen"); (new mod.TSDCodeGen("%s", %s)).emit();})())--",
-            "./" JSB_TYPE_ROOT,
-            use_project_settings ? "true" : "false"
-        );
-        lang->eval_source(code, err).ignore();
-        ERR_FAIL_COND_MSG(err != OK, "failed to evaluate jsb.editor.codegen");
+        static constexpr char code[] = R"--((async function(output_path, callback, use_project_settings, skip_static_types) {
+const mod = require("jsb.editor.codegen");
+try {
+    await (new mod.TSDCodeGen(output_path, use_project_settings)).emit(true);
+    callback(true);
+} catch (error) {
+    console.error(error);
+    callback(false);
+}
+    }))--";
+        std::shared_ptr<jsb::Environment> environment = lang->get_environment();
+        v8::Isolate* isolate = environment->get_isolate();
+        v8::Isolate::Scope isolate_scope(isolate);
+        v8::HandleScope handle_scope(isolate);
+        v8::Local<v8::Context> context = environment->get_context();
+        v8::Context::Scope context_scope(context);
+        v8::MaybeLocal<v8::Value> func_maybe = jsb::impl::Helper::compile_function(
+            context, code, ::std::size(code) - 1, "generate_types");
 
-        String autogen_url =  "res://" + jsb::internal::Settings::get_autogen_path();
-
-        // In case the user does something strange with their get_autogen_path, don't delete their project.
-        if (autogen_url.length() > 6 && FileAccess::exists(autogen_url.path_join(".gdignore")))
+        if (func_maybe.IsEmpty())
         {
-            DirAccess::open(autogen_url)->erase_contents_recursive();
-            install_files(filter_files(editor_plugin->install_files_, jsb::weaver::CH_GDIGNORE));
+            if (complete)
+            {
+                complete(false);
+            }
+            return;
         }
 
-        generate_all_scene_nodes_types();
-        generate_all_resource_types();
+        v8::Local<v8::Value> func = func_maybe.ToLocalChecked();
+
+        auto heap_complete = new std::function<void(bool)>([complete, editor_plugin](bool static_success)
+        {
+            if (!static_success)
+            {
+                if (complete)
+                {
+                    complete(false);
+                }
+                return;
+            }
+
+            // In case the user does something strange with their get_autogen_path, don't delete their project.
+            String autogen_url =  "res://" + jsb::internal::Settings::get_autogen_path();
+            if (autogen_url.length() > 6 && FileAccess::exists(autogen_url.path_join(".gdignore")))
+            {
+                DirAccess::open(autogen_url)->erase_contents_recursive();
+                GodotJSEditorPlugin::install_files(GodotJSEditorPlugin::filter_files(editor_plugin->install_files_, jsb::weaver::CH_GDIGNORE));
+            }
+
+            auto generate_resources = [complete](bool scene_success)
+            {
+                if (!scene_success)
+                {
+                    if (complete)
+                    {
+                        complete(false);
+                    }
+                    return;
+                }
+
+                Vector<String> resource_paths;
+                GodotJSEditorPlugin::get_all_resources(EditorFileSystem::get_singleton()->get_filesystem(), resource_paths);
+                GodotJSEditorPlugin::generate_resource_types(complete, resource_paths);
+            };
+
+            Vector<String> scene_paths;
+            GodotJSEditorPlugin::get_all_scenes(EditorFileSystem::get_singleton()->get_filesystem(), scene_paths);
+            GodotJSEditorPlugin::generate_scene_nodes_types(generate_resources, scene_paths);
+        });
+        v8::Local<v8::External> complete_callback = v8::External::New(isolate, heap_complete);
+
+        v8::Local<v8::Value> argv[] = {
+            jsb::impl::Helper::new_string(isolate, "./" JSB_TYPE_ROOT),
+            JSB_NEW_FUNCTION(context, GodotJSEditorPlugin::_on_generate_completed, complete_callback),
+            v8::Boolean::New(isolate, jsb::internal::Settings::get_codegen_use_project_settings()),
+            v8::Boolean::New(isolate, skip_static_types),
+        };
+
+        const v8::MaybeLocal<v8::Value> result = func.As<v8::Function>()->Call(context, v8::Undefined(isolate), ::std::size(argv), argv);
+        if (result.IsEmpty())
+        {
+            delete heap_complete;
+            if (complete)
+            {
+                complete(false);
+            }
+            return;
+        }
+    }
+}
+
+void GodotJSEditorPlugin::install_static_types(std::function<void(bool)> complete)
+{
+    if (GodotJSEditorPlugin* editor_plugin = GodotJSEditorPlugin::get_singleton())
+    {
+        const bool success = install_files(filter_files(editor_plugin->install_files_, jsb::weaver::CH_D_TS));
+        if (complete)
+        {
+            complete(success);
+        }
+        return;
+    }
+
+    if (complete)
+    {
+        complete(false);
+    }
+}
+
+void GodotJSEditorPlugin::try_install_project_files(std::function<void(bool)> complete, bool force)
+{
+    if (GodotJSEditorPlugin* editor_plugin = GodotJSEditorPlugin::get_singleton())
+    {
+        editor_plugin->remove_obsolete_files();
+        Vector<jsb::weaver::InstallFileInfo> modified;
+        if (verify_files(editor_plugin->install_files_, true, &modified))
+        {
+            on_successfully_installed();
+            return;
+        }
+
+        jsb_check(!modified.is_empty());
+        const String leading_symbol = "\n    - ";
+        String modified_file_list;
+        for (const jsb::weaver::InstallFileInfo& item : modified)
+        {
+            modified_file_list += leading_symbol + item.target_dir.path_join(item.source_name);
+            if ((item.hint & jsb::weaver::CH_OBSOLETE) != 0)
+            {
+                modified_file_list += " (delete)";
+            }
+        }
+
+        if (force)
+        {
+            install_project_files(complete, modified);
+        }
+        else if (DisplayServer::get_singleton()->get_name() == "headless")
+        {
+            JSB_LOG(Log, "Skipped existing TypeScript project files: %s", modified_file_list);
+
+            if (complete)
+            {
+                complete(true);
+            }
+        }
+        else
+        {
+            editor_plugin->confirm_dialog_->pending_installs_ = modified;
+            editor_plugin->confirm_dialog_->set_text(TTR("Found existing/missing files, re-installing presets will overwrite:") + modified_file_list);
+            editor_plugin->confirm_dialog_->popup_centered();
+        }
+    }
+}
+
+void GodotJSEditorPlugin::cleanup_invalid_files(std::function<void(bool)> complete)
+{
+    int deleted_num = 0;
+    Vector<String> invalid_files;
+    collect_invalid_files(invalid_files);
+    for (const String& invalid_file: invalid_files)
+    {
+        deleted_num += delete_file(invalid_file);
+        deleted_num += delete_file(invalid_file + ".map");
+    }
+    JSB_LOG(Log, "%d files were deleted", deleted_num);
+
+    if (complete)
+    {
+        complete(true);
     }
 }
 
@@ -601,6 +921,10 @@ void GodotJSEditorPlugin::get_all_resources(EditorFileSystemDirectory* p_dir, Ve
     for (int i = 0; i < p_dir->get_file_count(); i++)
     {
         String path = p_dir->get_file_path(i);
+        if (path.begins_with("res://install/") || path.begins_with("res://node_modules/"))
+        {
+            continue;
+        }
 
         if (!ResourceLoader::get_resource_type(path).is_empty() && !GodotJSExportPlugin::get_ignored_paths().has(path))
         {
@@ -614,13 +938,17 @@ void GodotJSEditorPlugin::get_all_resources(EditorFileSystemDirectory* p_dir, Ve
     }
 }
 
-void GodotJSEditorPlugin::generate_scene_nodes_types(const Vector<String>& p_paths)
+void GodotJSEditorPlugin::generate_scene_nodes_types(std::function<void(bool)> complete, const Vector<String>& p_paths)
 {
     if (!jsb::internal::Settings::get_gen_scene_dts()) return;
 
     if (p_paths.size() == 0)
     {
         JSB_LOG(Log, "generate_scene_nodes_dts: No scenes detected");
+        if (complete)
+        {
+            complete(true);
+        }
         return;
     }
 
@@ -634,24 +962,74 @@ void GodotJSEditorPlugin::generate_scene_nodes_types(const Vector<String>& p_pat
 
     GodotJSScriptLanguage* lang = GodotJSScriptLanguage::get_singleton();
     jsb_check(lang);
-    Error err;
 
-    const String code = jsb_format(
-        R"--((function(){const mod = require("jsb.editor.codegen"); (new mod.SceneTSDCodeGen("%s", ["%s"])).emit();})())--",
-        "./" + jsb::internal::Settings::get_autogen_path(),
-        String("\", \"").join(filtered_paths)
-    );
-    lang->eval_source(code, err).ignore();
-    ERR_FAIL_COND_MSG(err != OK, "failed to evaluate jsb.editor.codegen");
+    static constexpr char code[] = R"--((async function(output_path, resource_paths, callback) {
+const mod = require("jsb.editor.codegen");
+try {
+    await (new mod.SceneTSDCodeGen(output_path, resource_paths)).emit();
+    callback(true);
+} catch (error) {
+    console.error(error);
+    callback(false);
+}
+    }))--";
+
+    std::shared_ptr<jsb::Environment> environment = lang->get_environment();
+    v8::Isolate* isolate = environment->get_isolate();
+
+    v8::HandleScope handle_scope(isolate);
+    v8::Local<v8::Context> context = environment->get_context();
+
+    v8::MaybeLocal<v8::Value> func_maybe = jsb::impl::Helper::compile_function(
+        context, code, ::std::size(code) - 1, "generate_resource_type");
+
+    if (func_maybe.IsEmpty())
+    {
+        JSB_LOG(Error, "Failed to request resource codegen for: ", String("\", \"").join(filtered_paths));
+
+        if (complete)
+        {
+            complete(false);
+        }
+
+        return;
+    }
+
+    v8::Local<v8::Value> func = func_maybe.ToLocalChecked();
+    auto heap_complete = new std::function(complete);
+    v8::Local<v8::External> complete_callback = v8::External::New(isolate, heap_complete);
+
+    v8::Local<v8::Value> argv[] = {
+        jsb::impl::Helper::new_string(isolate, "./" + jsb::internal::Settings::get_autogen_path()),
+        jsb::BridgeHelper::TVariantArray<String>::from_vector(isolate, context, Variant::Type::STRING, filtered_paths),
+        JSB_NEW_FUNCTION(context, GodotJSEditorPlugin::_on_generate_completed, complete_callback)
+    };
+
+    const v8::MaybeLocal<v8::Value> result = func.As<v8::Function>()->Call(context, v8::Undefined(isolate), ::std::size(argv), argv);
+
+    if (result.IsEmpty())
+    {
+        JSB_LOG(Error, "Failed to execute resource codegen for: ", String("\", \"").join(filtered_paths));
+        delete heap_complete;
+
+        if (complete)
+        {
+            complete(false);
+        }
+    }
 }
 
-void GodotJSEditorPlugin::generate_resource_types(const Vector<String>& p_paths)
+void GodotJSEditorPlugin::generate_resource_types(std::function<void(bool)> complete, const Vector<String>& p_paths)
 {
     if (!jsb::internal::Settings::get_gen_resource_dts()) return;
 
     if (p_paths.size() == 0)
     {
         JSB_LOG(Log, "generate_resource_dts: No resources detected");
+        if (complete)
+        {
+            complete(true);
+        }
         return;
     }
 
@@ -665,29 +1043,76 @@ void GodotJSEditorPlugin::generate_resource_types(const Vector<String>& p_paths)
 
     GodotJSScriptLanguage* lang = GodotJSScriptLanguage::get_singleton();
     jsb_check(lang);
-    Error err;
 
-    const String code = jsb_format(
-        R"--((function(){const mod = require("jsb.editor.codegen"); (new mod.ResourceTSDCodeGen("%s", ["%s"])).emit();})())--",
-        "./" + jsb::internal::Settings::get_autogen_path(),
-        String("\", \"").join(filtered_paths)
-    );
-    lang->eval_source(code, err).ignore();
-    ERR_FAIL_COND_MSG(err != OK, "failed to evaluate jsb.editor.codegen");
+
+    static constexpr char code[] = R"--((async function(output_path, resource_paths, callback) {
+const mod = require("jsb.editor.codegen");
+try {
+    await (new mod.ResourceTSDCodeGen(output_path, resource_paths)).emit();
+    callback(true);
+} catch (error) {
+    console.error(error);
+    callback(false);
+}
+    }))--";
+
+    std::shared_ptr<jsb::Environment> environment = lang->get_environment();
+    v8::Isolate* isolate = environment->get_isolate();
+
+    v8::HandleScope handle_scope(isolate);
+    v8::Local<v8::Context> context = environment->get_context();
+
+    v8::MaybeLocal<v8::Value> func_maybe = jsb::impl::Helper::compile_function(
+        context, code, ::std::size(code) - 1, "generate_resource_type");
+
+    if (func_maybe.IsEmpty())
+    {
+        JSB_LOG(Error, "Failed to request resource codegen for: ", String("\", \"").join(filtered_paths));
+
+        if (complete)
+        {
+            complete(false);
+        }
+
+        return;
+    }
+
+    v8::Local<v8::Value> func = func_maybe.ToLocalChecked();
+    auto heap_complete = new std::function(complete);
+    v8::Local<v8::External> complete_callback = v8::External::New(isolate, heap_complete);
+
+    v8::Local<v8::Value> argv[] = {
+        jsb::impl::Helper::new_string(isolate, "./" + jsb::internal::Settings::get_autogen_path()),
+        jsb::BridgeHelper::TVariantArray<String>::from_vector(isolate, context, Variant::Type::STRING, filtered_paths),
+        JSB_NEW_FUNCTION(context, GodotJSEditorPlugin::_on_generate_completed, complete_callback)
+    };
+
+    const v8::MaybeLocal<v8::Value> result = func.As<v8::Function>()->Call(context, v8::Undefined(isolate), ::std::size(argv), argv);
+
+    if (result.IsEmpty())
+    {
+        JSB_LOG(Error, "Failed to execute resource codegen for: ", String("\", \"").join(filtered_paths));
+        delete heap_complete;
+
+        if (complete)
+        {
+            complete(false);
+        }
+    }
 }
 
 void GodotJSEditorPlugin::generate_all_scene_nodes_types()
 {
     Vector<String> paths;
     get_all_scenes(EditorFileSystem::get_singleton()->get_filesystem(), paths);
-    generate_scene_nodes_types(paths);
+    generate_scene_nodes_types({}, paths);
 }
 
 void GodotJSEditorPlugin::generate_all_resource_types()
 {
     Vector<String> paths;
     get_all_resources(EditorFileSystem::get_singleton()->get_filesystem(), paths);
-    generate_resource_types(paths);
+    generate_resource_types({}, paths);
 }
 
 void GodotJSEditorPlugin::load_editor_entry_module()
@@ -705,7 +1130,14 @@ void GodotJSEditorPlugin::_on_confirm_overwrite()
         JSB_LOG(Warning, "empty pending file list to install");
         return;
     }
-    install_ts_project(confirm_dialog_->pending_installs_);
+
+    install_project_files([&](auto success) {
+        if (confirm_dialog_->pending_installs_callback_)
+        {
+            confirm_dialog_->pending_installs_callback_(success);
+            confirm_dialog_->pending_installs_callback_ = {};
+        }
+    }, confirm_dialog_->pending_installs_);
 }
 
 bool GodotJSEditorPlugin::is_tsc_watching()

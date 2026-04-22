@@ -12,6 +12,7 @@
 #include "jsb_worker.h"
 #include "jsb_essentials.h"
 #include "jsb_amd_module_loader.h"
+#include "jsb_thread_safe_for_nodes_scope.h"
 
 #include "../internal/jsb_path_util.h"
 #include "../internal/jsb_class_util.h"
@@ -27,11 +28,18 @@
 #endif
 #endif
 #include "main/performance.h"
+#include "core/io/resource_loader.h"
+#include "core/os/thread_safe.h"
+#include "scene/main/node.h"
 
 //TODO remove this
 #include "../weaver/jsb_script.h"
 #include "modules/GodotJS/weaver/jsb_script_instance.h"
 #include "modules/GodotJS/weaver/jsb_script_language.h"
+
+#if JSB_WITH_WEB
+#include "../impl/web/jsb_web_interop.h"
+#endif
 
 #if !JSB_WITH_STATIC_BINDINGS
 #include "jsb_primitive_bindings_reflect.h"
@@ -377,9 +385,7 @@ namespace jsb
                     }
                 }
 
-#if !JSB_WITH_WEB && !JSB_WITH_JAVASCRIPTCORE
                 Worker::register_(context, global);
-#endif
                 Essentials::register_(context, global);
                 register_primitive_bindings(this);
             }
@@ -520,7 +526,8 @@ namespace jsb
     void Environment::update(uint64_t p_delta_msecs)
     {
 #if JSB_WITH_ESSENTIALS
-        if (timer_manager_.tick(p_delta_msecs))
+        const bool timers_ready = timer_manager_.tick(p_delta_msecs);
+        if (timers_ready)
         {
             v8::Isolate::Scope isolate_scope(isolate_);
             v8::HandleScope handle_scope(isolate_);
@@ -535,6 +542,9 @@ namespace jsb
 #endif
 
         // handle messages from workers
+#if JSB_WITH_WEB
+        jsbi_FlushPendingWorkerMessages();
+#else
         {
             std::vector<Message>& messages = inbox_.swap();
             if (!messages.empty())
@@ -552,6 +562,7 @@ namespace jsb
                 messages.clear();
             }
         }
+#endif
 
         exec_async_calls();
 
@@ -640,7 +651,11 @@ namespace jsb
         //TODO 0. HOW TO HANDLE COMPLICATED SITUATIONS? SUCH AS NESTED OBJECTS?
         jsb_nop();
 
-        transfer_in(p_context, *p_data);
+        {
+            ThreadSafeForNodesScope node_safe_scope;
+            transfer_in_bind(p_context, *p_data);
+            transfer_in_apply_state(*p_data);
+        }
 
         // call 'ontransfer'
         {
@@ -674,23 +689,31 @@ namespace jsb
         }
     }
 
-    void _invoke(Environment* p_env, const v8::Local<v8::Context>& p_context, const v8::Local<v8::Function>& p_callback, const Message* p_message)
+#if !JSB_WITH_WEB
+    void invoke_worker_callback_from_message(Environment* p_env, const v8::Local<v8::Context>& p_context, const v8::Local<v8::Function>& p_callback, const Message* p_message)
     {
         v8::Isolate *isolate = p_env->get_isolate();
 
-#if !JSB_WITH_WEB && !JSB_WITH_JAVASCRIPTCORE
         v8::Local<v8::Value> value;
         if (p_message)
         {
             const std::vector<TransferData>& transfers = p_message->get_transfers();
+            ThreadSafeForNodesScope node_safe_scope;
 
             for (const auto& transfer : transfers)
             {
-                p_env->transfer_in(p_context, transfer);
+                v8::HandleScope transfer_bind_scope(isolate);
+                p_env->transfer_in_bind(p_context, transfer);
             }
 
-#if JSB_WITH_V8
-            Serialization::VariantDeserializerDelegate delegate(p_env, p_message->get_transfers());
+            for (const auto& transfer : transfers)
+            {
+                v8::HandleScope transfer_state_scope(isolate);
+                p_env->transfer_in_apply_state(transfer);
+            }
+
+#if JSB_WITH_V8 || JSB_WITH_JAVASCRIPTCORE || JSB_WITH_QUICKJS
+            Serialization::VariantDeserializerDelegate delegate(p_env, transfers);
             v8::ValueDeserializer deserializer(isolate, p_message->get_buffer().ptr(), p_message->get_buffer().size(), &delegate);
             delegate.SetSerializer(&deserializer);
 #else
@@ -709,6 +732,11 @@ namespace jsb
                 JSB_LOG(Error, "failed to parse message value");
                 return;
             }
+
+#if !JSB_WITH_V8 && !JSB_WITH_JAVASCRIPTCORE && !JSB_WITH_QUICKJS
+            // Restore Godot bindings from transfer markers.
+            value = Worker::restore_transfer_markers(isolate, p_context, value, transfers);
+#endif
         }
 
         const impl::TryCatch try_catch(isolate);
@@ -720,9 +748,6 @@ namespace jsb
         {
             JSB_LOG(Error, "%s", BridgeHelper::get_exception(try_catch));
         }
-#else
-        JSB_LOG(Error, "worker message deserializer has not been implemented yet");
-#endif
     }
 
     void Environment::_on_worker_message(const v8::Local<v8::Context>& p_context, const Message& p_message)
@@ -747,29 +772,32 @@ namespace jsb
                 JSB_LOG(Error, "onmessage is not a function");
                 return;
             }
-            _invoke(this, p_context, callback.As<v8::Function>(), &p_message);
+            invoke_worker_callback_from_message(this, p_context, callback.As<v8::Function>(), &p_message);
             break;
         case Message::TYPE_READY:
+        {
             if (!obj->Get(p_context, jsb_name(this, onready)).ToLocal(&callback) || !callback->IsFunction())
             {
                 JSB_LOG(Error, "onready is not a function");
                 return;
             }
-            _invoke(this, p_context, callback.As<v8::Function>(), nullptr);
+            invoke_worker_callback_from_message(this, p_context, callback.As<v8::Function>(), nullptr);
             break;
+        }
         case Message::TYPE_ERROR:
             if (!obj->Get(p_context, jsb_name(this, onerror)).ToLocal(&callback) || !callback->IsFunction())
             {
                 JSB_LOG(Error, "onerror is not a function");
                 return;
             }
-            _invoke(this, p_context, callback.As<v8::Function>(), &p_message);
+            invoke_worker_callback_from_message(this, p_context, callback.As<v8::Function>(), &p_message);
             break;
         default:
             JSB_LOG(Error, "unknown message type %d", p_message.get_type());
             return;
         }
     }
+#endif
 
     std::shared_ptr<Environment> Environment::_access(void* p_runtime)
     {
@@ -781,7 +809,7 @@ namespace jsb
         return EnvironmentStore::get_shared().access();
     }
 
-    NativeObjectID Environment::bind_godot_object(NativeClassID p_class_id, Object* p_pointer, const v8::Local<v8::Object>& p_object)
+    NativeObjectID Environment::bind_godot_object(NativeClassID p_class_id, Object* p_pointer, const v8::Local<v8::Object>& p_object, bool p_js_owned_non_ref)
     {
         // handle the shadow instance created by asynchronous ResourceLoader
         if (ScriptInstance* si = p_pointer->get_script_instance(); si && !si->is_placeholder())
@@ -830,13 +858,13 @@ namespace jsb
             // otherwise, it will be strongly referenced in JS until all external references are released (unreference).
             external_rc = ref_counted->get_reference_count() - 1;
         }
-        const NativeObjectID object_id = bind_pointer(p_class_id, NativeClassType::GodotObject, (void*) p_pointer, p_object, external_rc);
+        const NativeObjectID object_id = bind_pointer(p_class_id, NativeClassType::GodotObject, (void*) p_pointer, p_object, external_rc, p_js_owned_non_ref);
 
         p_pointer->get_instance_binding(this, gd_instance_binding_callbacks);
         return object_id;
     }
 
-    NativeObjectID Environment::bind_pointer(NativeClassID p_class_id, NativeClassType::Type p_type, void* p_pointer, const v8::Local<v8::Object>& p_object, int p_external_rc)
+    NativeObjectID Environment::bind_pointer(NativeClassID p_class_id, NativeClassType::Type p_type, void* p_pointer, const v8::Local<v8::Object>& p_object, int p_external_rc, bool p_js_owned_non_ref)
     {
         check_internal_state();
         jsb_checkf(native_classes_.is_valid_index(p_class_id), "bad class_id");
@@ -851,6 +879,7 @@ namespace jsb
         p_object->SetAlignedPointerInInternalFields(IF_ObjectFieldCount, indices, internal_fields);
 
         handle->class_id = p_class_id;
+        handle->js_owned_non_ref_ = p_js_owned_non_ref;
 #if JSB_DEBUG
         handle->pointer = p_pointer;
 #endif
@@ -889,7 +918,8 @@ namespace jsb
         {
             return nullptr;
         }
-        return p_obj->GetAlignedPointerFromInternalField(IF_Pointer);
+        void* pointer = p_obj->GetAlignedPointerFromInternalField(IF_Pointer);
+        return verify_object(pointer) ? pointer : nullptr;
     }
 
     bool Environment::reference_object(void* p_pointer, bool p_is_inc)
@@ -910,8 +940,13 @@ namespace jsb
         {
             if (object_handle->ref_count_ == 0)
             {
-                // becomes a strong reference
-                jsb_check(!object_handle->ref_.IsEmpty());
+                // A first-pass GC callback may already have reset `ref_` while second-pass free
+                // is still pending. Treat this as a stale/dead binding instead of crashing.
+                if (jsb_unlikely(object_handle->ref_.IsEmpty()))
+                {
+                    JSB_LOG(Warning, "UNEXPECTED inc reference on dead value %d", (uintptr_t) p_pointer);
+                    return false;
+                }
                 object_handle->ref_.ClearWeak();
             }
             ++object_handle->ref_count_;
@@ -919,7 +954,12 @@ namespace jsb
         }
 
         // removing references
-        jsb_checkf(!object_handle->ref_.IsEmpty(), "removing references on dead values");
+        if (jsb_unlikely(object_handle->ref_.IsEmpty()))
+        {
+            JSB_LOG(Warning, "UNEXPECTED dec reference on dead value %d", (uintptr_t) p_pointer);
+            return false;
+        }
+
         jsb_check(object_handle->ref_count_ > 0);
 
         --object_handle->ref_count_;
@@ -943,7 +983,10 @@ namespace jsb
     // whether the ObjectHandlePtr lock satisfies the requirement of thread safety is still unknown
     void Environment::free_object(void* p_pointer, FinalizationType p_finalize)
     {
-        check_internal_state();
+        if (p_finalize != FinalizationType::None)
+        {
+            check_internal_state();
+        }
         ObjectHandlePtr object_handle = object_db_.try_get_object(p_pointer);
 
         // avoid crash in the situation that `InstanceBindingCallbacks::free_callback` is called before JS object gc callback is called,
@@ -957,8 +1000,13 @@ namespace jsb
         jsb_check(object_handle->pointer == p_pointer);
 #endif
         const NativeClassID class_id = object_handle->class_id;
+        const bool js_owned_non_ref = object_handle->js_owned_non_ref_;
         // hold it in a local variable to avoid gc too early
         v8::Global<v8::Object> obj_ref = std::move(object_handle->ref_);
+
+        // erase from ObjectDB before clearing the ref to avoid exposing a transient state
+        // with an empty `ref_` in the ObjectDB, which can race with reference callbacks.
+        object_db_.remove_object(object_handle, p_pointer);
 
         // TODO: Look into if we ought to be calling obj->free_instance_binding(this)
 
@@ -971,8 +1019,6 @@ namespace jsb
         //     clear_internal_field(isolate_, obj_ref);
         // }
 
-        object_handle = nullptr;
-        object_db_.remove_object(p_pointer);
         obj_ref.Reset();
 
         if (p_finalize != FinalizationType::None)
@@ -984,8 +1030,18 @@ namespace jsb
                 (String) class_info.name, class_id,
                 (uintptr_t) p_pointer);
 
+            FinalizationType finalize_type = is_persistent ? FinalizationType::None : p_finalize;
+            if (finalize_type != FinalizationType::None && class_info.type == NativeClassType::GodotObject)
+            {
+                const Object* godot_object = static_cast<const Object*>(p_pointer);
+                if (!godot_object->is_ref_counted() && !js_owned_non_ref)
+                {
+                    finalize_type = FinalizationType::None;
+                }
+            }
+
             //NOTE Godot will call Object::_predelete to post a notification NOTIFICATION_PREDELETE which finally call `ScriptInstance::callp`
-            class_info.finalizer(this, p_pointer, is_persistent ? FinalizationType::None : p_finalize);
+            class_info.finalizer(this, p_pointer, finalize_type);
         }
         else
         {
@@ -1073,6 +1129,7 @@ namespace jsb
     JavaScriptModule* Environment::_load_module(const String& p_parent_id, const String& p_module_id)
     {
         JSB_BENCHMARK_SCOPE(JSRealm, _load_module);
+
         JavaScriptModule* resolved_module = module_cache_.find(p_module_id);
         if (resolved_module && !resolved_module->is_reloading())
         {
@@ -1101,7 +1158,9 @@ namespace jsb
 
         // try resolve the module id
         String normalized_id;
-        if (p_module_id.begins_with("./") || p_module_id.begins_with("../"))
+        const bool is_relative_module_id = p_module_id.begins_with("./") || p_module_id.begins_with("../");
+        const bool is_absolute_module_id = internal::PathUtil::is_absolute_path(p_module_id);
+        if (is_relative_module_id)
         {
             const String combined_id = internal::PathUtil::combine(internal::PathUtil::dirname(p_parent_id), p_module_id);
             if (internal::PathUtil::extract(combined_id, normalized_id) != OK || normalized_id.is_empty())
@@ -1117,7 +1176,54 @@ namespace jsb
 
         // init source module
         ModuleSourceInfo source_info;
-        if (IModuleResolver* resolver = this->find_module_resolver(normalized_id, source_info))
+        IModuleResolver* resolver = nullptr;
+
+        // Resolve bare specifiers against parent-relative node_modules chains first.
+        // This mirrors Node-like lookup and supports non-hoisted pnpm/yarn layouts.
+        if (!is_relative_module_id && !is_absolute_module_id && p_parent_id.begins_with("res://"))
+        {
+            auto get_parent_lookup_dir = [](const String& p_dir) -> String
+            {
+                if (p_dir == "res://")
+                {
+                    return String();
+                }
+                const String parent_dir = internal::PathUtil::dirname(p_dir);
+                if (parent_dir == "res:/")
+                {
+                    return String("res://");
+                }
+                return parent_dir;
+            };
+
+            for (String lookup_dir = internal::PathUtil::dirname(p_parent_id); !lookup_dir.is_empty(); lookup_dir = get_parent_lookup_dir(lookup_dir))
+            {
+                if (!lookup_dir.begins_with("res://"))
+                {
+                    break;
+                }
+
+                String candidate_id;
+                if (internal::PathUtil::extract(internal::PathUtil::combine(lookup_dir, "node_modules", normalized_id), candidate_id) != OK || candidate_id.is_empty())
+                {
+                    continue;
+                }
+
+                if ((resolver = this->find_module_resolver(candidate_id, source_info)))
+                {
+                    normalized_id = candidate_id;
+                    break;
+                }
+            }
+
+        }
+
+        if (!resolver)
+        {
+            resolver = this->find_module_resolver(normalized_id, source_info);
+        }
+
+        if (resolver)
         {
             const StringName module_id = source_info.source_filepath;
 
@@ -1140,7 +1246,14 @@ namespace jsb
                     {
                         return nullptr;
                     }
+
+                    const impl::TryCatch try_catch_run(isolate);
+                    v8::HandleScope parse_scope(isolate);
                     ScriptClassInfo::_parse_script_class(context, *resolved_module);
+                    if (try_catch_run.has_caught())
+                    {
+                        JSB_LOG(Error, "something wrong when parsing '%s'\n%s", module_id, BridgeHelper::get_exception(try_catch_run));
+                    }
                 }
 
                 module_obj = resolved_module->module.Get(isolate);
@@ -1168,7 +1281,10 @@ namespace jsb
                 module.on_load(isolate, context);
                 {
                     const impl::TryCatch try_catch_run(isolate);
-                    ScriptClassInfo::_parse_script_class(context, module);
+                    {
+                        v8::HandleScope parse_scope(isolate);
+                        ScriptClassInfo::_parse_script_class(context, module);
+                    }
                     if (try_catch_run.has_caught())
                     {
                         JSB_LOG(Error, "something wrong when parsing '%s'\n%s", module_id, BridgeHelper::get_exception(try_catch_run));
@@ -1250,6 +1366,11 @@ namespace jsb
             }
             else
             {
+                JSB_LOG(Error,
+                    "failed to convert constructor argument %d for '%s' (%s)",
+                    index,
+                    js_class_name,
+                    Variant::get_type_name((*p_args[index]).get_type()));
                 return {};
             }
         }
@@ -1263,7 +1384,6 @@ namespace jsb
 
         v8::Local<v8::Object> reflect = context->Global()->Get(context, jsb_name(this, Reflect)).ToLocalChecked().As<v8::Object>();
         v8::Local<v8::Function> reflect_construct = reflect->Get(context, jsb_name(this, construct)).ToLocalChecked().As<v8::Function>();
-
         v8::Local<v8::Value> reflect_args[] = {
                 class_obj,
                 arguments,
@@ -1286,7 +1406,18 @@ namespace jsb
             return {};
         }
 
-        return this->try_get_object_id(p_this);
+        const NativeObjectID bound_object_id = this->try_get_object_id(p_this);
+        if (!bound_object_id)
+        {
+            JSB_LOG(Error, "constructed '%s' but did not bind native object %d", js_class_name, (uintptr_t) p_this);
+        }
+#if JSB_WITH_JAVASCRIPTCORE
+        else
+        {
+            _rebind(isolate, context, p_this, p_class_id);
+        }
+#endif
+        return bound_object_id;
     }
 
     void Environment::rebind(Object *p_this, ScriptClassID p_class_id)
@@ -1866,10 +1997,62 @@ namespace jsb
     Variant Environment::call_script_method(ScriptClassID p_script_class_id, NativeObjectID p_object_id, const StringName& p_method, const Variant** p_argv, int p_argc, Callable::CallError& r_error)
     {
         // static calls are not supported
-        if (!p_object_id) return {};
+        if (!p_object_id)
+        {
+            return {};
+        }
+
         if (!is_caller_thread())
         {
-            JSB_LOG(Error, "can not call script method from a different thread");
+            const uint64_t caller_thread_id = Thread::get_caller_id();
+            String object_type = "<unresolved>";
+            String node_path = "<not-node-or-not-in-tree>";
+            String owner_instance_id = "0";
+            String script_instance_ptr = "0";
+            String script_env_thread = "0";
+
+            if (object_db_.has_object(p_object_id))
+            {
+                Object* object = jsb::compat::ObjectDB::get_instance(ObjectID(*p_object_id));
+
+                if (object)
+                {
+                    owner_instance_id = String::num_uint64(object->get_instance_id());
+                    object_type = object->get_class();
+
+                    if (ScriptInstance* script_instance = object->get_script_instance())
+                    {
+                        script_instance_ptr = String::num_uint64((uintptr_t) script_instance);
+
+                        if (const GodotJSScriptInstance* godot_js_instance = dynamic_cast<const GodotJSScriptInstance*>(script_instance))
+                        {
+                            script_env_thread = String::num_uint64(godot_js_instance->get_env_thread_id());
+                        }
+                    }
+
+                    if (const Node* node = Object::cast_to<Node>(object))
+                    {
+                        if (node->is_inside_tree())
+                        {
+                            node_path = String(node->get_path());
+                        }
+                    }
+                }
+            }
+
+            JSB_LOG(Error, "can not call script method from a different thread (env_thread=%s caller_thread=%s node_safe=%d group_processing=%d object_id=%s object_instance_id=%s script_instance_ptr=%s script_env_thread=%s method=%s object_type=%s node_path=%s)",
+                String::num_uint64((uint64_t) thread_id_),
+                String::num_uint64((uint64_t) caller_thread_id),
+                (int) is_current_thread_safe_for_nodes(),
+                (int) Node::is_group_processing(),
+                String::num_uint64(*p_object_id),
+                owner_instance_id,
+                script_instance_ptr,
+                script_env_thread,
+                String(p_method),
+                object_type,
+                node_path);
+
             r_error.error = Callable::CallError::CALL_ERROR_INVALID_METHOD;
             return {};
         }
@@ -2013,53 +2196,110 @@ namespace jsb
         // upon mutation if there's a single reference to that data.
     }
 
-    void Environment::transfer_in(const v8::Local<v8::Context>& p_context, const TransferData& p_data)
+    void Environment::transfer_in_bind(const v8::Local<v8::Context>& p_context, const TransferData& p_data)
     {
-        if (p_data.variant.get_type() == Variant::Type::OBJECT)
+        if (p_data.variant.get_type() != Variant::Type::OBJECT)
         {
-            const ObjectID object_id = p_data.variant;
-            Object* instance = jsb::compat::ObjectDB::get_instance(object_id);
+            return;
+        }
 
-            if (!instance)
+        const ObjectID object_id = p_data.variant;
+        Object* instance = jsb::compat::ObjectDB::get_instance(object_id);
+
+        if (!instance)
+        {
+            JSB_LOG(Error, "transferred object not found: %d", (uint64_t) object_id);
+            return;
+        }
+
+        const bool has_script_path = !p_data.script_path.is_empty();
+
+        if (has_script_path)
+        {
+            const Ref<GodotJSScript> script = ResourceLoader::load(p_data.script_path);
+
+            if (script.is_valid())
             {
-                JSB_LOG(Error, "transferred object not found: %d", (uint64_t) object_id);
+                // Always rebind transferred scripts onto the receiver environment.
+                // Existing instances can be stale and still reference a source worker env.
+                if (instance->get_script_instance())
+                {
+                    instance->set_script_instance(nullptr);
+                }
+
+                ScriptInstance* script_instance = script->instance_create(instance);
+
+                if (!script_instance)
+                {
+                    JSB_LOG(Error, "failed to instantiate transferred script for object %d: %s", (uint64_t) object_id, p_data.script_path);
+                }
+            }
+            else
+            {
+                JSB_LOG(Error, "failed to load transferred script for object %d: %s", (uint64_t) object_id, p_data.script_path);
+            }
+        }
+
+        if (!object_db_.has_object(instance))
+        {
+            v8::Local<v8::Object> obj;
+            jsb_check(TypeConvert::gd_obj_to_js(isolate_, p_context, instance, obj));
+
+            if (instance->is_ref_counted())
+            {
+                RefCounted* reference = static_cast<RefCounted*>(instance);
+
+                if (reference->unreference())
+                {
+                    // Uh, we really shouldn't end up here. This can only occur if another thread is doing something it
+                    // really shouldn't be doing. I guess we don't want to be responsible for a leak, but this is bad.
+                    memdelete(reference);
+                    JSB_LOG(Error, "transferred object unexpectedly freed: %d", (uint64_t) object_id);
+                    return;
+                }
+            }
+        }
+    }
+
+    void Environment::transfer_in_apply_state(const TransferData& p_data)
+    {
+        if (p_data.variant.get_type() != Variant::Type::OBJECT)
+        {
+            return;
+        }
+
+        const ObjectID object_id = p_data.variant;
+        Object* instance = jsb::compat::ObjectDB::get_instance(object_id);
+
+        if (!instance)
+        {
+            JSB_LOG(Error, "transferred object not found while applying state: %d", (uint64_t) object_id);
+            return;
+        }
+
+        if (p_data.script_path.is_empty())
+        {
+            return;
+        }
+
+        ScriptInstance* script_instance = instance->get_script_instance();
+
+        if (!script_instance)
+        {
+            const Ref<GodotJSScript> script = ResourceLoader::load(p_data.script_path);
+
+            if (!script.is_valid())
+            {
+                JSB_LOG(Error, "failed to load transferred script for object %d: %s", (uint64_t) object_id, p_data.script_path);
                 return;
             }
 
-            jsb_checkf(!object_db_.has_object(instance), "transferred in an object already registered in the environment");
+            script_instance = script->instance_create(instance);
+        }
 
-            if (!object_db_.has_object(instance))
-            {
-                v8::Local<v8::Object> obj;
-                jsb_check(TypeConvert::gd_obj_to_js(isolate_, p_context, instance, obj));
-
-                if (instance->is_ref_counted())
-                {
-                    RefCounted *reference = static_cast<RefCounted *>(instance);
-
-                    if (reference->unreference())
-                    {
-                        // Uh, we really shouldn't end up here. This can only occur if another thread is doing something it
-                        // really shouldn't be doing. I guess we don't want to be responsible for a leak, but this is bad.
-                        memdelete(reference);
-                        JSB_LOG(Error, "transferred object unexpectedly freed: %d", (uint64_t) object_id);
-                        return;
-                    }
-                }
-            }
-
-            if (!p_data.script_path.is_empty())
-            {
-                ScriptInstance *script_instance = instance->get_script_instance();
-
-                if (script_instance)
-                {
-                    for (const Pair<StringName, Variant>& pair : p_data.state)
-                    {
-                        script_instance->set(pair.first, pair.second);
-                    }
-                }
-            }
+        for (const Pair<StringName, Variant>& pair : p_data.state)
+        {
+            script_instance->set(pair.first, pair.second);
         }
     }
 
@@ -2082,6 +2322,13 @@ namespace jsb
     {
         string_name_cache_.shrink();
         source_map_cache_.clear();
+
+        // `dispose()` explicitly destroys bound objects, and shutdown-time forced GC has caused
+        // fatal crashes while V8 is invoking weak callbacks. Skip forced collection in this state.
+        if (flags_ & EF_PreDispose)
+        {
+            return;
+        }
 
 #if JSB_EXPOSE_GC_FOR_TESTING
         isolate_->RequestGarbageCollectionForTesting(v8::Isolate::kFullGarbageCollection);

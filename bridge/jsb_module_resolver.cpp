@@ -7,7 +7,7 @@ namespace jsb
 {
     namespace
     {
-        // the cost of copy return is acceptable since Vector copy constructor is by-reference under the hood 
+        // the cost of copy return is acceptable since Vector copy constructor is by-reference under the hood
         PackedStringArray get_dynamic_search_paths()
         {
 #ifdef TOOLS_ENABLED
@@ -18,7 +18,7 @@ namespace jsb
 #endif
         }
     }
-    
+
     bool IModuleResolver::load_as_json(Environment* p_env, JavaScriptModule& p_module, const String& p_asset_path, const Vector<uint8_t>& p_bytes, size_t p_len)
     {
         v8::Isolate* isolate = p_env->get_isolate();
@@ -295,6 +295,11 @@ namespace jsb
         // 3: module_id/index.js
         if (has_module_id_dir)
         {
+            if (check_package_file_path(p_module_id, String(), o_source_info))
+            {
+                return true;
+            }
+
             const String index_path = internal::PathUtil::combine(p_module_id, "index.js");
             if (FileAccess::exists(index_path))
             {
@@ -394,7 +399,12 @@ namespace jsb
 
         if (package_exports.is_empty())
         {
-            // No exports mapping, fall back to absolute resolution
+            if (p_module_id.is_empty())
+            {
+                // Avoid infinite recursion for package root lookups: callers already attempt directory index fallback.
+                return false;
+            }
+
             return this->check_absolute_file_path(internal::PathUtil::combine(p_package_path, p_module_id), o_source_info);
         }
 
@@ -521,7 +531,7 @@ namespace jsb
         internal::FileAccessSourceReader reader(p_asset_path);
         return load(p_env, p_asset_path, reader, p_module);
     }
-    
+
     bool DefaultModuleResolver::load(Environment* p_env, const String& p_asset_path, const internal::ISourceReader& p_reader, JavaScriptModule& p_module)
     {
         if (p_reader.is_null() || p_reader.get_length() == 0)
@@ -568,6 +578,22 @@ namespace jsb
             const v8::MaybeLocal<v8::Value> func_maybe = impl::Helper::compile_function(context, (const char*) source.ptr(), (int) len, source_url);
             if (func_maybe.IsEmpty())
             {
+                static constexpr size_t kDiagnosticPrefixMaxBytes = 192;
+                const size_t diagnostic_prefix_len = std::min(len, kDiagnosticPrefixMaxBytes);
+                String diagnostic_prefix;
+                if (diagnostic_prefix_len > 0)
+                {
+                    PackedByteArray diagnostic_bytes;
+                    diagnostic_bytes.resize((int) diagnostic_prefix_len);
+                    memcpy(diagnostic_bytes.ptrw(), source.ptr(), diagnostic_prefix_len);
+                    diagnostic_prefix = String::utf8((const char*) diagnostic_bytes.ptr(), (int) diagnostic_prefix_len);
+                }
+                JSB_LOG(Warning,
+                    "module compile failed asset_path='%s' source_url='%s' source_len=%s prefix='%s'",
+                    p_asset_path,
+                    source_url,
+                    String::num_uint64((uint64_t) len),
+                    diagnostic_prefix);
                 //NOTE an exception should have been thrown in _compile_run if MaybeLocal is empty
                 return false;
             }

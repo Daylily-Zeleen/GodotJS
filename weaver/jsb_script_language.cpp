@@ -113,7 +113,7 @@ void GodotJSScriptLanguage::finish()
     once_inited_ = false;
     environment_->dispose();
     environment_.reset();
-#if !JSB_WITH_WEB && !JSB_WITH_JAVASCRIPTCORE
+#if !JSB_WITH_WEB
     jsb::Worker::finish();
 #endif
     {
@@ -238,11 +238,12 @@ void GodotJSScriptLanguage::get_string_delimiters(List<String>* p_delimiters) co
 }
 #endif
 
-//TODO this virtual method seems never used in godot?
+#if !GODOT_4_7_OR_NEWER
 Script* GodotJSScriptLanguage::create_script() const
 {
     return memnew(GodotJSScript);
 }
+#endif
 
 bool GodotJSScriptLanguage::validate(const String& p_script, const String& p_path, List<String>* r_functions, List<ScriptError>* r_errors, List<Warning>* r_warnings, HashSet<int>* r_safe_lines) const
 {
@@ -472,16 +473,12 @@ void GodotJSScriptLanguage::scan_external_changes()
 
 void GodotJSScriptLanguage::thread_enter()
 {
-#if !JSB_WITH_WEB && !JSB_WITH_JAVASCRIPTCORE
     jsb::Worker::on_thread_enter();
-#endif
 }
 
 void GodotJSScriptLanguage::thread_exit()
 {
-#if !JSB_WITH_WEB && !JSB_WITH_JAVASCRIPTCORE
     jsb::Worker::on_thread_exit();
-#endif
 }
 
 void GodotJSScriptLanguage::profiling_start()

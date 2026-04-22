@@ -7,20 +7,34 @@
 
 namespace jsb
 {
+    class ObjectDB;
+
 #if JSB_THREADING
 #   define JSB_OBJECT_DB_HANDLE(Type, Ptr) Type(&lock_, Ptr)
 #   define JSB_OBJECT_DB_STATEMENT(Statement) Statement
+#   define JSB_OBJECT_DB_PREPARE_FOR_REMOVAL(Handle) Handle.prepare_for_removal()
+#else
+#   define JSB_OBJECT_DB_HANDLE(Type, Ptr) (sizeof(Type), Ptr)
+#   define JSB_OBJECT_DB_STATEMENT(Statement) (void) 0
+#   define JSB_OBJECT_DB_PREPARE_FOR_REMOVAL(Handle) Handle = nullptr
+#endif
 
+#if JSB_THREADING
     struct ObjectHandlePtr
     {
     private:
+        friend class ObjectDB;
+
         RWLock* lock_;
         internal::SArray<ObjectHandle, NativeObjectID>::Pointer ptr_;
 
-    public:
-        ObjectHandlePtr(const ObjectHandlePtr& ) = delete;
+        // Release slot address scope while preserving ObjectDB write lock.
+        jsb_force_inline void prepare_for_removal() { ptr_ = nullptr; }
 
-        ObjectHandlePtr(): lock_(nullptr) {}
+    public:
+        ObjectHandlePtr(const ObjectHandlePtr&) = delete;
+
+        ObjectHandlePtr() : lock_(nullptr) {}
         ObjectHandlePtr(RWLock* p_lock, internal::SArray<ObjectHandle, NativeObjectID>::Pointer&& p_ptr)
             : lock_(p_lock), ptr_(std::move(p_ptr))
         {
@@ -68,9 +82,9 @@ namespace jsb
         internal::SArray<ObjectHandle, NativeObjectID>::ConstPointer ptr_;
 
     public:
-        ObjectHandleConstPtr(const ObjectHandleConstPtr& ) = delete;
+        ObjectHandleConstPtr(const ObjectHandleConstPtr&) = delete;
 
-        ObjectHandleConstPtr(): lock_(nullptr) {}
+        ObjectHandleConstPtr() : lock_(nullptr) {}
         ObjectHandleConstPtr(const RWLock* p_lock, internal::SArray<ObjectHandle, NativeObjectID>::ConstPointer&& p_ptr)
             : lock_(p_lock), ptr_(std::move(p_ptr))
         {
@@ -110,9 +124,6 @@ namespace jsb
         }
     };
 #else
-#   define JSB_OBJECT_DB_HANDLE(Type, Ptr) (sizeof(Type), Ptr)
-#   define JSB_OBJECT_DB_STATEMENT(Statement) (void) 0
-
     typedef internal::SArray<ObjectHandle, NativeObjectID>::Pointer ObjectHandlePtr;
     typedef internal::SArray<ObjectHandle, NativeObjectID>::ConstPointer ObjectHandleConstPtr;
 #endif
@@ -130,6 +141,15 @@ namespace jsb
 #if JSB_THREADING
         RWLock lock_;
 #endif
+
+        // Remove object entry while caller already holds ObjectDB write lock.
+        jsb_force_inline void remove_object_internal(void* p_pointer)
+        {
+            const NativeObjectID* entry = objects_index_.getptr(p_pointer);
+            jsb_check(entry);
+            objects_.remove_at_checked(*entry);
+            objects_index_.erase(p_pointer);
+        }
 
     public:
         ObjectDB(int p_capacity)
@@ -212,7 +232,24 @@ namespace jsb
         NativeObjectID add_object(void* p_pointer, ObjectHandlePtr* o_handle)
         {
             JSB_OBJECT_DB_STATEMENT(lock_.write_lock());
-            jsb_checkf(!objects_index_.has(p_pointer), "duplicated bindings");
+            if (const NativeObjectID* existing_object_id_ptr = objects_index_.getptr(p_pointer))
+            {
+                const NativeObjectID existing_object_id = *existing_object_id_ptr;
+                ObjectHandle& existing_handle = objects_.get_value(existing_object_id);
+
+                if (existing_handle.ref_.IsEmpty())
+                {
+                    objects_.remove_at_checked(existing_object_id);
+                    objects_index_.erase(p_pointer);
+                }
+                else
+                {
+                    if (o_handle) *o_handle = JSB_OBJECT_DB_HANDLE(ObjectHandlePtr, objects_.get_value_scoped(existing_object_id));
+                    else JSB_OBJECT_DB_STATEMENT(lock_.write_unlock());
+                    return existing_object_id;
+                }
+            }
+
             const NativeObjectID object_id = objects_.add({});
             objects_index_.insert(p_pointer, object_id);
 
@@ -222,17 +259,16 @@ namespace jsb
         }
 
         // [MUTABLE]
-        void remove_object(void* p_pointer)
+        jsb_force_inline void remove_object(ObjectHandlePtr& p_handle, void* p_pointer)
         {
-            JSB_OBJECT_DB_STATEMENT(lock_.write_lock());
-            const NativeObjectID* entry = objects_index_.getptr(p_pointer);
-            jsb_check(entry);
-            objects_.remove_at_checked(*entry);
-            objects_index_.erase(p_pointer);
-            JSB_OBJECT_DB_STATEMENT(lock_.write_unlock());
+#if JSB_DEBUG
+            jsb_check(p_handle->pointer == p_pointer);
+#endif
+            JSB_OBJECT_DB_PREPARE_FOR_REMOVAL(p_handle);
+            remove_object_internal(p_pointer);
+            p_handle = nullptr;
         }
     };
 }
 
 #endif
-
