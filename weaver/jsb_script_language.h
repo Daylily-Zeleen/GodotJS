@@ -4,6 +4,11 @@
 #include "../bridge/jsb_bridge.h"
 #include "../compat/jsb_compat.h"
 
+#if defined(TOOLS_ENABLED) && GODOT_4_7_OR_NEWER
+#include "core/object/editor_language.h"
+#endif
+
+
 class GodotJSScript;
 class GodotJSMonitor;
 
@@ -159,6 +164,13 @@ public:
     virtual bool is_control_flow_keyword(ConstStringRefCompat p_keyword) const override;
     virtual Vector<ScriptTemplate> get_built_in_templates(ConstStringNameRefCompat p_object) override;
 
+	/* EDITOR FUNCTIONS */
+#if defined(TOOLS_ENABLED) && GODOT_4_7_OR_NEWER
+    EditorLanguage editor_language;
+	// Must not return `nullptr`. `EditorLanguage` can be used as default implementation for languages without editor support.
+	virtual EditorLanguage *get_editor_language() override {return &editor_language;}
+#endif // defined(TOOLS_ENABLED) && GODOT_4_7_OR_NEWER
+
 #if GODOT_4_5_OR_NEWER
     virtual Vector<String> get_reserved_words() const override;
 
@@ -202,7 +214,7 @@ public:
     virtual bool is_using_templates() override { return true; }
 #if !GODOT_4_6_OR_NEWER
 #ifndef DISABLE_DEPRECATED
-    virtual bool has_named_classes() const override { return false; }
+    // virtual bool has_named_classes() const override { return false; }
 #endif // DISABLE_DEPRECATED
 #endif // !GODOT_4_6_OR_NEWER
     virtual bool supports_builtin_mode() const override { return false; }
