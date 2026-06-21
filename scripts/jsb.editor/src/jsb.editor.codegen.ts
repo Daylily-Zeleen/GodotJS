@@ -524,9 +524,22 @@ const TypeMutations: Record<string, TypeMutation> = {
                 "callv<M extends GodotNames<this>>(method: M, argArray: GArray<ResolveGodotNameParameters<this, NoInfer<M>>>): ResolveGodotReturnType<this, NoInfer<M>>",
             ],
             get_property_list: mutate_return_type("GArray<GDictionary<PropertyInfo>>"),
+            get_method_list: mutate_return_type("GArray<GDictionary<MethodInfo>>"),
             get_script: mutate_return_type("null | Script"),
             set_script: mutate_parameter_type("script", "null | Script"),
+            get_incoming_connections: mutate_return_type("GArray<GDictionary<SignalConnection>>"),
+            get_signal_connection_list: mutate_return_type("GArray<GDictionary<SignalConnection>>"),
+            get_signal_list: mutate_return_type("GDictionary<Record<string, GDictionary<MethodInfo>>>"),
+            _get_property_list: mutate_return_type("GArray<GDictionary<PropertyInfo>>"),
+            _validate_property: mutate_parameter_type("property", "GDictionary<PropertyInfo>"),
         },
+    },
+    ClassDB: {
+        property_overrides: {
+            class_get_method_list: mutate_return_type("GArray<GDictionary<MethodInfo>>"),
+            class_get_property_list: mutate_return_type("GArray<GDictionary<PropertyInfo>>"),
+            class_get_signal_list: mutate_return_type("GArray<GDictionary<MethodInfo>>")
+        }
     },
     PackedByteArray: {
         intro: [

@@ -430,6 +430,21 @@ declare module "godot" {
         usage: PropertyUsageFlags;
     }
 
+    interface MethodInfo {
+		name: string;
+		args: GArray<GDictionary<PropertyInfo>>;
+		default_args: GArray<GAny>;
+		flags: MethodFlags;
+		id: int64;
+		return: GDictionary<PropertyInfo>;
+    }
+
+    interface SignalConnection {
+		signal: Signal;
+		callable: Callable;
+		flag: Object.ConnectFlags;
+    }
+
     type BindRight<F extends Function, B extends any[]> = F extends (
         this: infer T,
         ...args: [...infer A, ...B]

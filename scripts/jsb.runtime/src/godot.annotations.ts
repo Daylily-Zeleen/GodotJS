@@ -1017,7 +1017,7 @@ export function createClassBinder(): ClassBinder {
                                     (
                                         target as ClassMemberDecoratorTarget<ClassSetterDecoratorContext<Godot.Object>>
                                     ).call(this, value);
-                                    invoke_with_this(update_cached_value, this);
+                                    invoke_with_this(update_cached_value, this, value);
                                 };
                             }
 
