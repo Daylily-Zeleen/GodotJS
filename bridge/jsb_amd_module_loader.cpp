@@ -49,6 +49,9 @@ namespace jsb
 
         if (succeeded)
         {
+            v8::Isolate::Scope isolate_scope(isolate);
+            v8::HandleScope handle_scope(isolate);
+
             const v8::Local<v8::Context> context = isolate->GetCurrentContext();
             const v8::Local<v8::Function> evaluator = evaluator_.Get(isolate);
             v8::Local<v8::Value> result;

@@ -839,7 +839,7 @@ namespace jsb
             jsb_check(!class_info->clazz.IsEmpty());
             jsb_check(class_info->name == class_name);
             jsb_check(!class_info->clazz.IsEmpty());
-            exports->Set(context, jsb_name(p_env, JSWorker), class_info->clazz.Get(isolate));
+            exports->Set(context, jsb_name(p_env, JSWorker), class_info->clazz.Get(isolate)).Check();
             return true;
         }
 

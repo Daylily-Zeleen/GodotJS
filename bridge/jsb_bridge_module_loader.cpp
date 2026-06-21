@@ -433,6 +433,7 @@ namespace jsb
             v8::Local<v8::String> property_name = info[0].As<v8::String>();
 
             jsb_check(property_name->IsString());
+            jsb_check(!property_name.IsEmpty());
 
             info.GetReturnValue().Set(JSB_NEW_FUNCTION(context, ObjectReflectBindingUtil::_godot_object_cached_export_update, property_name));
         }

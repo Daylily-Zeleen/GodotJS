@@ -58,9 +58,9 @@ namespace jsb::impl
                 const v8::Local<v8::Value> value = impl_private::Data<int64_t>::New(builder_->isolate_, data);
                 const v8::Local<v8::Context> context = builder_->isolate_->GetCurrentContext();
 
-                enumeration_->DefineOwnProperty(context, key, value);
+                enumeration_->DefineOwnProperty(context, key, value).Check();
                 // represents the value back to string for convenient uses, such as MyColor[MyColor.White] => 'White'
-                enumeration_->DefineOwnProperty(context, value->ToString(context).ToLocalChecked(), key, v8::DontEnum);
+                enumeration_->DefineOwnProperty(context, value->ToString(context).ToLocalChecked(), key, v8::DontEnum).Check();
                 return *this;
             }
 
