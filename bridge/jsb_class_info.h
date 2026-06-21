@@ -18,6 +18,16 @@ namespace jsb
     typedef void (*ConstructorFunc)(const v8::FunctionCallbackInfo<v8::Value>&);
     typedef void (*FinalizerFunc)(Environment*, void*, FinalizationType);
 
+    /**
+     * @brief Correspond with [NativeClassType::Type::Custom].
+     * Typically,get `CustomNativeBase*` from js object's internal field use `dynamic_cast<>()` to cast to child class.
+     */
+    class CustomNativeBase
+    {
+    public:
+        virtual ~CustomNativeBase() = default;
+    };
+
     namespace NativeClassType
     {
         //NOTE the enum value of Type must be a even number, since it's stored as AlignedPointerInternalField
@@ -48,6 +58,10 @@ namespace jsb
             // type for JSWorker.
             // unnecessary but used to avoid class lookup.
             Worker = 38,
+
+            // type for Shadow.
+            // unnecessary but used to avoid class lookup.
+            Shadow = 40,
 
             // reserved for future use
             Custom = 64,

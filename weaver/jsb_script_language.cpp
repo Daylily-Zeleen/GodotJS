@@ -6,6 +6,7 @@
 #include "../jsb_project_preset.h"
 #include "../internal/jsb_internal.h"
 #include "../bridge/jsb_worker.h"
+#include "../bridge/jsb_shadow_realm.h"
 
 #include "jsb_script.h"
 
@@ -116,6 +117,7 @@ void GodotJSScriptLanguage::finish()
 #if !JSB_WITH_WEB
     jsb::Worker::finish();
 #endif
+    jsb::ShadowRealm_::finish_all();
     {
         std::vector<ShadowEnvironment> shadow_environments;
         {

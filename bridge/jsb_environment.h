@@ -29,6 +29,8 @@
 
 namespace jsb
 {
+    class CrossEnvManager;
+
     enum : uint32_t { kIsolateEmbedderData = 0, };
     enum : uint32_t { kContextEmbedderData = 0, };
 
@@ -423,6 +425,7 @@ namespace jsb
 
         jsb_force_inline void notify_microtasks_run() { flags_ |= EF_MicrotaskCheckpoint; }
         jsb_force_inline bool is_disposing() const { return (flags_ & EF_PreDispose) != 0; }
+        jsb_force_inline bool is_shadow() const { return (flags_ & EF_Shadow) != 0; }
 
         jsb_force_inline Variant* alloc_variant(const Variant& p_templet) { jsb_check(p_templet.get_type() != Variant::OBJECT); return variant_allocator_.alloc(p_templet); }
         jsb_force_inline Variant* alloc_variant() { return variant_allocator_.alloc(); }
@@ -518,6 +521,8 @@ namespace jsb
         }
 #endif
 
+        void handle_message(Message&& p_message);
+
         class IModuleLoader* find_module_loader(const StringName& p_module_id) const
         {
             const HashMap<StringName, class IModuleLoader*>::ConstIterator it = module_loaders_.find(p_module_id);
@@ -593,6 +598,16 @@ namespace jsb
         // All `get_` methods will crash if `p_class_id` is invalid
         jsb_force_inline NativeClassInfoPtr get_native_class(const NativeClassID p_class_id) { return native_classes_.get_value_scoped(p_class_id); }
         jsb_force_inline NativeClassInfoConstPtr get_native_class(const NativeClassID p_class_id) const { return native_classes_.get_value_scoped(p_class_id); }
+
+        jsb_force_inline NativeClassInfoPtr find_native_class(const StringName& p_class_name, NativeClassID *r_class_id = nullptr) {
+            for (auto it = native_classes_.begin(); it!= native_classes_.end(); ++it) {
+                if (it.is_valid() && it->name == p_class_name) {
+                    if (r_class_id) { *r_class_id = it.get_index(); }
+                    return native_classes_.get_value_scoped(it.get_index());
+                }
+            }
+            return NativeClassInfoPtr(nullptr, nullptr); 
+        }
 
         jsb_force_inline ScriptClassInfoPtr add_script_class(ScriptClassID& r_class_id)
         {
@@ -732,6 +747,14 @@ namespace jsb
         }
 
         void free_object(void* p_pointer, FinalizationType p_finalize);
+
+    private:
+        internal::SArray<std::weak_ptr<Environment>, internal::Index32> shadow_env_list_;
+
+    public:
+        // Shadow environment will be updated together with the main environment.
+        const internal::Index32 add_shadow_env(const std::shared_ptr<Environment>& p_env) { return shadow_env_list_.add(p_env->weak_from_this()); }
+        void remove_shadow_env(internal::Index32 p_index) { shadow_env_list_.remove_at(p_index); }
     };
 
 #if !JSB_WITH_WEB
