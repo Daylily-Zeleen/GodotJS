@@ -168,7 +168,7 @@ Dictionary GodotJSEditorHelper::_build_node_type_descriptor(const BitField<Scene
 
             if (animation_mixer)
             {
-                List<StringName> library_names;
+                LocalVector<StringName> library_names;
                 animation_mixer->get_animation_library_list(&library_names);
 
                 Dictionary animation_libraries_object_literal;
@@ -182,7 +182,7 @@ Dictionary GodotJSEditorHelper::_build_node_type_descriptor(const BitField<Scene
 
                     Array animation_names_union_array;
 
-                    List<StringName> animation_names;
+                    LocalVector<StringName> animation_names;
                     library->get_animation_list(&animation_names);
 
                     for (const StringName& animation_name : animation_names)
@@ -243,6 +243,7 @@ Dictionary GodotJSEditorHelper::_build_node_type_descriptor(const BitField<Scene
 
                 if (argument.get_type() == Variant::Type::DICTIONARY && Dictionary(argument) == children_descriptor)
                 {
+                    // TODO: Conflite with un-generated scene dts.
                     Dictionary scene_nodes;
                     scene_nodes[jsb_string_name(type)] = (int32_t) DescriptorType::Godot;
                     scene_nodes[jsb_string_name(name)] = "SceneNodes";

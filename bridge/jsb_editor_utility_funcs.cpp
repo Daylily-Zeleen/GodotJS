@@ -315,29 +315,13 @@ namespace jsb
             }
         }
 
-        void build_enum_info(v8::Isolate* isolate, const v8::Local<v8::Context>& context, const Variant::Type variant, const StringName &enum_name, const ClassDB::ClassInfo::EnumInfo& enum_info, const v8::Local<v8::Object>& object)
+        void build_enum_info(v8::Isolate* isolate, const v8::Local<v8::Context>& context, const StringName &enum_name, const GDType::EnumInfo& enum_info, const v8::Local<v8::Object>& object)
         {
             v8::Local<v8::Object> values_object = v8::Object::New(isolate);
-            int index = 0;
-            for (List<StringName>::ConstIterator it = enum_info.constants.begin(); it != enum_info.constants.end(); ++it, ++index)
+            for (const auto &E : enum_info.values)
             {
-                const String name = internal::NamingUtil::get_enum_value_name(*it);
-                bool valid = true;
-                int value = Variant::get_enum_value(variant, enum_name, *it, &valid);
-                values_object->Set(context, impl::Helper::new_string(isolate, name), v8::Number::New(isolate, value)).Check();
-            }
-            set_field(isolate, context, object, "literals", values_object);
-            set_field(isolate, context, object, JSB_GET_FIELD_NAME_PRESET(enum_info, is_bitfield));
-        }
-
-        void build_enum_info(v8::Isolate* isolate, const v8::Local<v8::Context>& context, const ConstantHashMap& constants, const StringName &enum_name, const ClassDB::ClassInfo::EnumInfo& enum_info, const v8::Local<v8::Object>& object)
-        {
-            v8::Local<v8::Object> values_object = v8::Object::New(isolate);
-            int index = 0;
-            for (List<StringName>::ConstIterator it = enum_info.constants.begin(); it != enum_info.constants.end(); ++it, ++index)
-            {
-                int64_t value = constants.get(*it);
-                const String name = internal::NamingUtil::get_enum_value_name(*it);
+                const String name = E.key;
+                const int value = E.value;
                 values_object->Set(context, impl::Helper::new_string(isolate, name), v8::Number::New(isolate, value)).Check();
             }
             set_field(isolate, context, object, "literals", values_object);
@@ -361,7 +345,7 @@ namespace jsb
             const ClassDB::ClassInfo& class_info = class_it->value;
             set_field(isolate, context, class_info_obj, "name", internal::NamingUtil::get_class_name(class_name));
             set_field(isolate, context, class_info_obj, "internal_name", class_name);
-            set_field(isolate, context, class_info_obj, "super", internal::NamingUtil::get_class_name(class_info.inherits));
+            set_field(isolate, context, class_info_obj, "super", class_info.inherits_ptr ? class_info.inherits_ptr->gdtype->get_name() : "");
 
 #if JSB_EXCLUDE_GETSET_METHODS
             HashSet<StringName> omitted_methods;
@@ -482,17 +466,18 @@ namespace jsb
             // class: enums
             {
                 JSB_HANDLE_SCOPE(isolate);
-                v8::Local<v8::Array> enums_obj = v8::Array::New(isolate, (int) class_info.enum_map.size());
+                const auto &enum_map = class_info.gdtype->get_enum_map(true);
+                v8::Local<v8::Array> enums_obj = v8::Array::New(isolate, (int) enum_map.size());
                 set_field(isolate, context, class_info_obj, "enums", enums_obj);
                 int index = 0;
-                const ConstantHashMap& constants = class_info.constant_map;
-                for (const KeyValue<StringName, ClassDB::ClassInfo::EnumInfo>& pair : class_info.enum_map)
+                for (const KeyValue<StringName, const GDType::EnumInfo*>& pair : enum_map)
                 {
                     JSB_HANDLE_SCOPE(isolate);
-                    const ClassDB::ClassInfo::EnumInfo& enum_info = pair.value;
+                    const String &enum_name = pair.key;
+                    const GDType::EnumInfo& enum_info = *pair.value;
                     v8::Local<v8::Object> enum_info_obj = v8::Object::New(isolate);
                     set_field(isolate, context, enum_info_obj, "name", internal::NamingUtil::get_enum_name(pair.key));
-                    build_enum_info(isolate, context, constants, pair.key, enum_info, enum_info_obj);
+                    build_enum_info(isolate, context, enum_name, enum_info, enum_info_obj);
                     enums_obj->Set(context, index++, enum_info_obj).Check();
                 }
             }
@@ -500,11 +485,11 @@ namespace jsb
             // class: constants (int only)
             {
                 JSB_HANDLE_SCOPE(isolate);
-
-                v8::Local<v8::Array> constants_obj = v8::Array::New(isolate, (int) class_info.constant_map.size());
+                const auto &constant_map = class_info.gdtype->get_integer_constant_map(true);
+                v8::Local<v8::Array> constants_obj = v8::Array::New(isolate, (int) constant_map.size());
                 set_field(isolate, context, class_info_obj, "constants", constants_obj);
                 int index = 0;
-                for (const KeyValue<StringName, int64_t>& pair : class_info.constant_map)
+                for (const KeyValue<StringName, int64_t>& pair : constant_map)
                 {
                     JSB_HANDLE_SCOPE(isolate);
                     v8::Local<v8::Object> constant_info_obj = v8::Object::New(isolate);
@@ -518,16 +503,17 @@ namespace jsb
             {
                 JSB_HANDLE_SCOPE(isolate);
 
-                v8::Local<v8::Array> signals_obj = v8::Array::New(isolate, (int) class_info.signal_map.size());
+                const auto& signal_map = class_info.gdtype->get_signal_map(true);
+                v8::Local<v8::Array> signals_obj = v8::Array::New(isolate, (int) signal_map.size());
                 set_field(isolate, context, class_info_obj, "signals", signals_obj);
                 int index = 0;
-                for (const KeyValue<StringName, MethodInfo>& pair : class_info.signal_map)
+                for (const KeyValue<StringName, const MethodInfo*>& pair : signal_map)
                 {
                     JSB_HANDLE_SCOPE(isolate);
                     v8::Local<v8::Object> signal_info_obj = v8::Object::New(isolate);
                     set_field(isolate, context, signal_info_obj, "internal_name", pair.key);
                     set_field(isolate, context, signal_info_obj, "name", internal::NamingUtil::get_member_name(pair.key));
-                    build_signal_info(isolate, context, pair.value, signal_info_obj);
+                    build_signal_info(isolate, context, *pair.value, signal_info_obj);
                     signals_obj->Set(context, index++, signal_info_obj).Check();
                 }
             }
@@ -725,14 +711,15 @@ namespace jsb
                 JSB_HANDLE_SCOPE(isolate);
                 List<StringName> enumerations;
                 Variant::get_enumerations_for_enum(TYPE, enum_name, &enumerations);
-                ClassDB::ClassInfo::EnumInfo enum_info;
+                GDType::EnumInfo enum_info;
                 for (const StringName& enumeration : enumerations)
                 {
-                    enum_info.constants.push_back(enumeration);
+                    const int enum_value = Variant::get_enum_value(TYPE, enum_name, enumeration);
+                    enum_info.values.insert(enumeration, enum_value);
                 }
                 v8::Local<v8::Object> enum_info_obj = v8::Object::New(isolate);
                 set_field(isolate, context, enum_info_obj, "name", enum_name);
-                build_enum_info(isolate, context, TYPE, enum_name, enum_info, enum_info_obj);
+                build_enum_info(isolate, context, enum_name, enum_info, enum_info_obj);
                 enums_obj->Set(context, index++, enum_info_obj).Check();
             }
         }
@@ -840,14 +827,15 @@ namespace jsb
                 JSB_HANDLE_SCOPE(isolate);
                 List<StringName> enumerations;
                 Variant::get_enumerations_for_enum(TYPE, enum_name, &enumerations);
-                ClassDB::ClassInfo::EnumInfo enum_info;
+                GDType::EnumInfo enum_info;
                 for (const StringName& enumeration : enumerations)
                 {
-                    enum_info.constants.push_back(enumeration);
+                    const int enum_value = Variant::get_enum_value(TYPE, enum_name, enumeration);
+                    enum_info.values.insert(enumeration, enum_value);
                 }
                 v8::Local<v8::Object> enum_info_obj = v8::Object::New(isolate);
                 set_field(isolate, context, enum_info_obj, "name", enum_name);
-                build_enum_info(isolate, context, TYPE, enum_name, enum_info, enum_info_obj);
+                build_enum_info(isolate, context, enum_name, enum_info, enum_info_obj);
                 enums_obj->Set(context, index++, enum_info_obj).Check();
             }
         }
@@ -1033,7 +1021,7 @@ namespace jsb
                 array->Set(context, array_index++, constant_obj).Check();
                 continue;
             }
-            if (enum_packs.has(enum_name))
+            if (enum_packs.has(enum_name) || enum_name.is_empty())
             {
                 continue;
             }
@@ -1101,7 +1089,7 @@ namespace jsb
             }
 
             String name = property.name.substr(property.name.find_char('/') + 1, property.name.length());
-            actions->Set(context, index++,  impl::Helper::new_string(isolate, name));
+            actions->Set(context, index++,  impl::Helper::new_string(isolate, name)).Check();
         }
 
         info.GetReturnValue().Set(actions);

@@ -504,7 +504,7 @@ console.assert(!gd.is_instance_valid(inst));
 
     TEST_CASE("[jsb] RefCounted objects")
     {
-        WeakRef* weak_ref = memnew(WeakRef);
+        WeakRef* weak_ref = memnew(WeakRef).ptr();
         {
             GodotJSScriptLanguageIniter initer;
 

@@ -1,5 +1,6 @@
 #include "jsb_settings.h"
 
+#include "core/io/resource_uid.h"
 #include "jsb_internal_pch.h"
 #include "jsb_macros.h"
 #include "jsb_logger.h"
@@ -383,7 +384,8 @@ namespace jsb::internal
     String Settings::get_entry_script_path()
     {
         init_settings();
-        return GLOBAL_GET(kRtEntryScriptPath);
+        const String path = GLOBAL_GET(kRtEntryScriptPath);
+        return ResourceUID::get_singleton()->ensure_path(path);
     }
 
     bool Settings::get_camel_case_bindings_enabled()

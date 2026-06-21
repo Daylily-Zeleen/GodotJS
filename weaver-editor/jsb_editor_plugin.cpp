@@ -2,6 +2,9 @@
 #include "jsb_docked_panel.h"
 #include "jsb_export_plugin.h"
 
+#include "scene/main/scene_tree.h"
+#include "servers/display/display_server.h"
+
 #if GODOT_4_7_OR_NEWER
 #include "core/object/callable_mp.h"
 #endif
@@ -133,9 +136,10 @@ GodotJSEditorPlugin::GodotJSEditorPlugin()
     // VSCode treats the directory containing the jsconfig.json file as the root of a javascript project, and reads type declarations from d.ts.
     add_install_file({ "godot.minimal.d.ts", "res://" JSB_TYPE_ROOT, jsb::weaver::CH_TYPESCRIPT | jsb::weaver::CH_D_TS });
     add_install_file({ "godot.mix.d.ts", "res://" JSB_TYPE_ROOT, jsb::weaver::CH_TYPESCRIPT | jsb::weaver::CH_D_TS });
+    add_install_file({ "godot.shadowRealm.d.ts", "res://" JSB_TYPE_ROOT, jsb::weaver::CH_TYPESCRIPT | jsb::weaver::CH_D_TS });
 #if !JSB_WITH_WEB
     add_install_file({ "godot.worker.d.ts", "res://" JSB_TYPE_ROOT, jsb::weaver::CH_TYPESCRIPT | jsb::weaver::CH_D_TS });
-#endif
+    #endif
     add_install_file({ "jsb.editor.bundle.d.ts", "res://" JSB_TYPE_ROOT, jsb::weaver::CH_TYPESCRIPT | jsb::weaver::CH_D_TS });
     add_install_file({ "jsb.runtime.bundle.d.ts", "res://" JSB_TYPE_ROOT, jsb::weaver::CH_TYPESCRIPT | jsb::weaver::CH_D_TS });
 
@@ -625,62 +629,6 @@ Vector<String> GodotJSEditorPlugin::_filter_resource_paths(const PackedStringArr
     return filtered_paths;
 }
 
-bool GodotJSEditorPlugin::_is_path_matchn(const PackedStringArray& p_wildcards, const String& p_path)
-{
-    for (const String& wildcard: p_wildcards)
-    {
-        if ((wildcard.contains_char('*') || wildcard.contains_char('?')) && p_path.match(wildcard))
-        {
-            return true;
-        }
-        else
-        {
-            const String& lower_case_path = p_path.to_lower();
-            String lower_case_wildcard = wildcard.to_lower();
-            if (lower_case_path == lower_case_wildcard){
-                return true; // Exact match file.
-            }
-            else
-            {
-                if (!lower_case_wildcard.ends_with("/"))
-                {
-                    // Cheat as directory.
-                    lower_case_wildcard += "/";
-                }
-
-                if (lower_case_path.begins_with(lower_case_wildcard))
-                {
-                    return true; // Match directory.
-                }
-            }
-        }
-    }
-
-    return false;
-}
-
-Vector<String> GodotJSEditorPlugin::_filter_resource_paths(const PackedStringArray& p_exclude_wildcards, const PackedStringArray& p_include_wildcards, const Vector<String>& p_paths)
-{
-    Vector<String> filtered_paths;
-    if (!p_include_wildcards.is_empty())
-    {
-        for (const String& path: p_paths)
-        {
-            if (!p_exclude_wildcards.is_empty() && _is_path_matchn(p_exclude_wildcards, path))
-            {
-                continue;
-            }
-    
-            if (_is_path_matchn(p_include_wildcards, path))
-            {
-                filtered_paths.push_back(path);
-            }
-        }
-    }
-
-    return filtered_paths;
-}
-
 void GodotJSEditorPlugin::_on_generate_completed(const v8::FunctionCallbackInfo<v8::Value>& info)
 {
     bool success = info.Length() >= 1 && info[0]->IsBoolean() && info[0].As<v8::Boolean>()->Value();
@@ -979,6 +927,7 @@ try {
     v8::Isolate::Scope isolate_scope(isolate);
 
     v8::HandleScope handle_scope(isolate);
+
     v8::Local<v8::Context> context = environment->get_context();
     v8::Context::Scope context_scope(context);
 
@@ -1063,6 +1012,7 @@ try {
     v8::Isolate::Scope isolate_scope(isolate);
 
     v8::HandleScope handle_scope(isolate);
+
     v8::Local<v8::Context> context = environment->get_context();
     v8::Context::Scope context_scope(context);
 

@@ -10,6 +10,7 @@
 #include "jsb_type_convert.h"
 #include "jsb_class_register.h"
 #include "jsb_worker.h"
+#include "jsb_shadow_realm.h"
 #include "jsb_essentials.h"
 #include "jsb_amd_module_loader.h"
 #include "jsb_thread_safe_for_nodes_scope.h"
@@ -19,6 +20,7 @@
 #include "../internal/jsb_variant_util.h"
 #include "../internal/jsb_settings.h"
 #include "../jsb_project_preset.h"
+#include "core/variant/variant_utility.h"
 
 #ifdef TOOLS_ENABLED
 #if GODOT_4_5_OR_NEWER
@@ -385,6 +387,7 @@ namespace jsb
                     }
                 }
 
+                ShadowRealm_::register_(context, global);
                 Worker::register_(context, global);
                 Essentials::register_(context, global);
                 register_primitive_bindings(this);
@@ -439,6 +442,11 @@ namespace jsb
         // cleanup all class templates (must do after objects cleaned up)
         native_classes_.clear();
 
+
+        while (v8::Isolate::GetCurrent() == isolate_)
+        {
+            isolate_->Exit();
+        }
         isolate_->Dispose();
         isolate_ = nullptr;
 
@@ -582,6 +590,41 @@ namespace jsb
         debugger_.update();
 #endif
         variant_allocator_.drain();
+
+        // Update shadow environments.
+        internal::Index32 shadow_env_id = shadow_env_list_.get_first_index();
+        while (shadow_env_id)
+        {
+            jsb_check(shadow_env_list_.is_valid_index(shadow_env_id));
+            jsb_check(!shadow_env_list_.is_empty());
+            std::weak_ptr<Environment> weak_realm;
+            shadow_env_list_.try_get_value(shadow_env_id, weak_realm);
+
+            const internal::Index32 next_id = shadow_env_list_.get_next_index(shadow_env_id);
+
+            if (const std::shared_ptr<Environment> realm =  weak_realm.lock())
+            {
+                realm->update(p_delta_msecs);
+            }
+            else 
+            {
+                JSB_LOG(Error, "A shadow environment is no longer valid, it will be removed from the list.");
+                shadow_env_list_.remove_at_checked(shadow_env_id);
+            }
+
+            shadow_env_id = next_id;
+        }
+    }
+
+    void Environment::handle_message(Message&& p_message)
+    {
+        v8::Isolate::Scope isolate_scope(isolate_);
+        v8::HandleScope handle_scope(isolate_);
+        const v8::Local<v8::Context> context = context_.Get(isolate_);
+        v8::Context::Scope context_scope(context);
+
+        v8::HandleScope message_handle_scope(isolate_);
+        _on_worker_message(context, p_message);
     }
 
     // handle async calls (from InstanceBindingCallbacks)
@@ -1338,9 +1381,11 @@ namespace jsb
         {
             JSB_LOG(Verbose, "crossbinding on previously bound object %d (addr:%d), rebind it to script class %d", object_id, (uintptr_t) p_this, p_class_id);
 
-            //TODO may not work in this way
-            _rebind(isolate, context, p_this, p_class_id);
-            return object_id;
+            auto handler = object_db_.try_get_object(p_this);
+            object_db_.remove_object(handler, p_this);
+            // //TODO may not work in this way
+            // _rebind(isolate, context, p_this, p_class_id);
+            // return object_id;
         }
 
         StringName js_class_name;
@@ -1362,7 +1407,7 @@ namespace jsb
 
             if (TypeConvert::gd_var_to_js(isolate, context, *p_args[index], argument))
             {
-                arguments->Set(context, index, argument);
+                arguments->Set(context, index, argument).Check();
             }
             else
             {
@@ -1604,7 +1649,7 @@ namespace jsb
             return nullptr;
         }
 
-        String class_name = internal::NamingUtil::get_class_name(p_class_info->name);
+        String class_name = internal::NamingUtil::get_class_name(p_class_info->gdtype->get_name());
 
         if (const NativeClassID* it = godot_classes_index_.getptr(class_name))
         {
@@ -1777,24 +1822,32 @@ namespace jsb
         v8::Local<v8::Value> value;
 
         impl::TryCatch try_catch(isolate);
-        bool get_result = self->Get(context, name).ToLocal(&value);
-
-        if (try_catch.has_caught())
+        if(self->Has(context, name).ToChecked()) // ?
         {
-            JSB_LOG(Error, "Failed to get property '%s' on a %s: %s", p_info.name, p_info.class_name, jsb::BridgeHelper::get_exception(try_catch));
-            return false;
+            bool get_result = self->Get(context, name).ToLocal(&value);
+
+            if (try_catch.has_caught())
+            {
+                JSB_LOG(Error, "Failed to get property '%s' on a %s: %s", p_info.name, p_info.class_name, jsb::BridgeHelper::get_exception(try_catch));
+                return false;
+            }
+
+            if (!get_result)
+            {
+                return false;
+            }
+
+            if (!TypeConvert::js_to_gd_var(isolate, context, value, p_info.type, r_val))
+            {
+                JSB_LOG(Error, "Failed to get property '%s' on a %s: Failed to convert result to a Godot type (%s)", p_info.name, p_info.class_name, VariantUtilityFunctions::type_string(p_info.type));
+                return false;
+            }
+        }
+        else
+        {
+            r_val = VariantUtilityFunctions::type_convert( p_info.default_value, p_info.type);
         }
 
-        if (!get_result)
-        {
-            return false;
-        }
-
-        if (!TypeConvert::js_to_gd_var(isolate, context, value, p_info.type, r_val))
-        {
-            JSB_LOG(Error, "Failed to get property '%s' on a %s: Failed to convert result to a Godot type", p_info.name, p_info.class_name);
-            return false;
-        }
         return true;
     }
 

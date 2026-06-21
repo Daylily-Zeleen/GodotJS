@@ -24,9 +24,11 @@ namespace jsb
 
         jsb_check(p_class_info);
 
-        String class_name = internal::NamingUtil::get_class_name(p_class_info->name);
+        const StringName &gd_class_name = p_class_info->gdtype->get_name();
+
+        String class_name = internal::NamingUtil::get_class_name(gd_class_name);
         const NativeClassID class_id = p_env->add_native_class(NativeClassType::GodotObject, class_name);
-        JSB_LOG(VeryVerbose, "expose godot type %s(%d) as %s", p_class_info->name, class_id, class_name);
+        JSB_LOG(VeryVerbose, "expose godot type %s(%d) as %s", gd_class_name, class_id, class_name);
 
         // construct type template
         {
@@ -34,7 +36,7 @@ namespace jsb
             impl::ClassBuilder class_builder = ObjectTemplate::create(p_env, class_id);
 
             //NOTE all singleton object will overwrite the class itself in 'godot' module, so we need make all things defined on PrototypeTemplate.
-            const bool is_singleton_class = Engine::get_singleton()->has_singleton(p_class_info->name);
+            const bool is_singleton_class = Engine::get_singleton()->has_singleton(gd_class_name);
             auto static_builder = is_singleton_class ? class_builder.Instance() : class_builder.Static();
 
 #if JSB_EXCLUDE_GETSET_METHODS
@@ -95,14 +97,14 @@ namespace jsb
                 }
             }
 
-             if (p_class_info->name == jsb_string_name(Object))
+             if (gd_class_name == jsb_string_name(Object))
              {
                  // class: special methods
                  class_builder.Instance().Method(jsb_literal(free), _godot_object_free);
              }
 
              // class: signals
-             for (const KeyValue<StringName, MethodInfo>& pair : p_class_info->signal_map)
+             for (const KeyValue<StringName, const MethodInfo*>& pair : p_class_info->gdtype->get_signal_map(true))
              {
                  v8::HandleScope handle_scope_for_signal(isolate);
                  String signal_name = internal::NamingUtil::get_member_name(pair.key);
@@ -113,23 +115,21 @@ namespace jsb
              HashSet<StringName> enum_consts;
 
              // class: enum (nested in class)
-             for (const KeyValue<StringName, ClassDB::ClassInfo::EnumInfo>& pair : p_class_info->enum_map)
+             for (const KeyValue<StringName, const GDType::EnumInfo*>& pair : p_class_info->gdtype->get_enum_map(true))
              {
                  v8::HandleScope handle_scope_for_enum(isolate);
                  impl::ClassBuilder::EnumDeclaration enumeration = static_builder.Enum(internal::NamingUtil::get_enum_name(pair.key));
-                 for (const StringName& enum_value_name : pair.value.constants)
+                 for (const KeyValue<StringName, int64_t>& enum_value : pair.value->values)
                  {
-                     const String& js_enum_name = internal::NamingUtil::get_enum_value_name(enum_value_name);
+                     const String& js_enum_name = internal::NamingUtil::get_enum_value_name(enum_value.key);
                      jsb_not_implemented(js_enum_name.contains("."), "hierarchically nested definition is currently not supported");
-                     const auto& const_it = p_class_info->constant_map.find(enum_value_name);
-                     jsb_check(const_it);
-                     enumeration.Value(js_enum_name, const_it->value);
-                     enum_consts.insert(enum_value_name);
+                     enumeration.Value(js_enum_name, enum_value.value);
+                     enum_consts.insert(enum_value.key);
                  }
              }
 
              // class: constants
-             for (const KeyValue<StringName, int64_t>& pair : p_class_info->constant_map)
+             for (const KeyValue<StringName, int64_t>& pair : p_class_info->gdtype->get_integer_constant_map(true))
              {
                  if (enum_consts.has(pair.key)) continue;
                  const String& js_const_name = (String) internal::NamingUtil::get_constant_name(pair.key);
@@ -148,7 +148,7 @@ namespace jsb
                 // It's safe to expect that the base class is fully built,
                 // because single inheritance is used in Godot (which means a reflect_bind class will only be accessed until it's fully built).
                 class_builder.Inherit(super_class_info->clazz);
-                JSB_LOG(VeryVerbose, "%s (%d) extends %s (%d)", p_class_info->name, class_id, p_class_info->inherits_ptr->name, super_class_id);
+                JSB_LOG(VeryVerbose, "%s (%d) extends %s (%d)", gd_class_name, class_id, p_class_info->inherits_ptr->gdtype->get_name(), super_class_id);
             }
 
             // preparation for return
@@ -157,8 +157,8 @@ namespace jsb
 
                 class_info->clazz = class_builder.Build();
                 jsb_check(!class_info->clazz.IsEmpty());
-                jsb_check(class_info->name == internal::NamingUtil::get_class_name(p_class_info->name));
-                JSB_LOG(VeryVerbose, "build class info %s (%d) exposed as %s, addr: %s", p_class_info->name, class_id, class_info->name, class_info.ptr());
+                jsb_check(class_info->name == internal::NamingUtil::get_class_name(gd_class_name));
+                JSB_LOG(VeryVerbose, "build class info %s (%d) exposed as %s, addr: %s", gd_class_name, class_id, class_info->name, class_info.ptr());
                 if (r_class_id) *r_class_id = class_id;
                 return class_info;
             }

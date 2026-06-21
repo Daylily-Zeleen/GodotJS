@@ -16,4 +16,6 @@
 
 #include "../weaver/jsb_script_language.h"
 
+#include <core/object/callable_mp.h>
+
 #endif
