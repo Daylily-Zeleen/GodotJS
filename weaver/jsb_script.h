@@ -90,7 +90,7 @@ public:
     virtual ScriptInstance* instance_create(Object* p_this) override { return instance_construct(p_this, true); }
 
     virtual PlaceHolderScriptInstance* placeholder_instance_create(Object* p_this) override;
-    virtual bool instance_has(const Object* p_this) const override;
+    virtual bool instance_has(const Object* p_this) const;
 
     virtual bool has_source_code() const override { return !source_.is_empty(); }
     virtual String get_source_code() const override { return source_; }
