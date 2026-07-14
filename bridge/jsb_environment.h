@@ -29,6 +29,7 @@
 
 namespace jsb
 {
+    using jsb::compat::ThreadID;
     class CrossEnvManager;
 
     enum : uint32_t { kIsolateEmbedderData = 0, };
@@ -119,7 +120,7 @@ namespace jsb
         v8::Global<v8::Symbol> symbols_[Symbols::kNum];
 
         /*volatile*/
-        Thread::ID thread_id_;
+        ThreadID thread_id_;
 
         v8::Isolate* isolate_;
         v8::Global<v8::Context> context_;
@@ -227,7 +228,7 @@ namespace jsb
             // Port for the debugger. Disable if zero.
             uint16_t debugger_port = 0;
 
-            Thread::ID thread_id = 0;
+            ThreadID thread_id = 0;
             Type type = Type::Default;
         };
 
@@ -272,13 +273,13 @@ namespace jsb
         jsb_force_inline static Environment* wrap(v8::Isolate* p_isolate)
         {
             Environment* env = (Environment*) p_isolate->GetData(kIsolateEmbedderData);
-            // jsb_check(env && env->thread_id_ == Thread::get_caller_id());
+            // jsb_check(env && env->thread_id_ == OS::get_singleton()->get_thread_caller_id());
             return env;
         }
         jsb_force_inline static Environment* wrap(const v8::Local<v8::Context>& p_context)
         {
             Environment* env = (Environment*) p_context->GetAlignedPointerFromEmbedderData(kContextEmbedderData);
-            // jsb_check(env && env->thread_id_ == Thread::get_caller_id());
+            // jsb_check(env && env->thread_id_ == OS::get_singleton()->get_thread_caller_id());
             return env;
         }
 
@@ -319,12 +320,12 @@ namespace jsb
 
         ObjectCacheID get_cached_function(const v8::Local<v8::Function>& p_func);
         bool release_function(ObjectCacheID p_func_id);
-        Variant call_function(void* p_pointer, ObjectCacheID p_func_id, const Variant** p_args, int p_argcount, Callable::CallError &r_error);
+        Variant call_function(void* p_pointer, ObjectCacheID p_func_id, const Variant** p_args, int p_argcount, GDExtensionCallError &r_error);
 
         /**
          * This method will not throw any JS exception.
          */
-        Variant call_script_method(ScriptClassID p_script_class_id, NativeObjectID p_object_id, const StringName& p_method, const Variant** p_argv, int p_argc, Callable::CallError& r_error);
+        Variant call_script_method(ScriptClassID p_script_class_id, NativeObjectID p_object_id, const StringName& p_method, const Variant** p_argv, int p_argc, GDExtensionCallError& r_error);
 
         void prepare_transfer_out(NativeObjectID p_worker_handle_id, int transfer_index, const Variant& p_variant, TransferData& r_transfer_data);
         void finalize_transfer_out(const TransferData& p_data);
@@ -412,8 +413,8 @@ namespace jsb
         void start_debugger(uint16_t p_port);
 
         // whether it's called from the same thread as the environment spawned
-        jsb_force_inline bool is_caller_thread() const { return thread_id_ == Thread::UNASSIGNED_ID || Thread::get_caller_id() == thread_id_; }
-        jsb_force_inline Thread::ID get_thread_id() const { return thread_id_; }
+        jsb_force_inline bool is_caller_thread() const { return thread_id_ == jsb::compat::UNASSIGNED_THREAD_ID || OS::get_singleton()->get_thread_caller_id() == thread_id_; }
+        jsb_force_inline ThreadID get_thread_id() const { return thread_id_; }
 
         // ensure it's called from the same thread as the environment spawned
         jsb_force_inline void check_internal_state() const
@@ -665,7 +666,7 @@ namespace jsb
         void _execute_deferred();
 
         Variant _call(v8::Isolate* isolate, const v8::Local<v8::Context>& context, const v8::Local<v8::Function>& p_func,
-            const v8::Local<v8::Value>& p_self, const Variant** p_args, int p_argcount, Callable::CallError& r_error);
+            const v8::Local<v8::Value>& p_self, const Variant** p_args, int p_argcount, GDExtensionCallError& r_error);
 
         /**
          * Setup `onready` fields (this method must be called before `_ready`).
@@ -734,7 +735,7 @@ namespace jsb
                 env->variant_allocator_.free_safe(variant);
                 JSB_LOG(VeryVerbose, "deleting possibly reference-based variant (%s:%d) thread:%s",
                     Variant::get_type_name(type), (uintptr_t) variant,
-                    uitos(Thread::get_caller_id()));
+                    uitos(OS::get_singleton()->get_thread_caller_id()));
                 return;
             }
             else

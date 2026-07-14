@@ -140,6 +140,14 @@ namespace v8
         return JS_IsArrayBuffer(val);
     }
 
+#if JSB_PREFER_QUICKJS_NG
+    bool Data::IsProxy() const
+    {
+        const JSValue val = isolate_->stack_val(stack_pos_);
+        return JS_IsProxy(val);
+    }
+#endif
+
     bool Data::strict_eq(const Data& other) const
     {
         const JSValue val1 = isolate_->stack_val(stack_pos_);

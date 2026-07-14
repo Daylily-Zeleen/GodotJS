@@ -1,33 +1,51 @@
 ﻿#ifndef GODOTJS_EDITOR_PROGRESS_H
 #define GODOTJS_EDITOR_PROGRESS_H
-#include "jsb_editor_pch.h"
 
-/**
- * A simple wrapper for EditorProgress.
- * Used in editor scripts to show progress (a modal popup).
- */
-class GodotJSEditorProgress : public Object
-{
-    GDCLASS(GodotJSEditorProgress, Object);
+#include "godot_cpp/classes/popup_panel.hpp"
+#include "godot_cpp/templates/hash_map.hpp"
 
+namespace godot {
+class Label;
+class ProgressBar;
+class MarginContainer;
+
+class EditorProgress {
 private:
-    String state_name_;
-
-    //TODO alternative implementation of Progress in gdextension
-    EditorProgress* progress_ = nullptr;
-
-protected:
-    static void _bind_methods();
+    const String name;
+    int current = 0;
 
 public:
-    GodotJSEditorProgress() = default;
-    virtual ~GodotJSEditorProgress() override;
+    EditorProgress(const String& p_task_name, int p_total);
+    ~EditorProgress();
 
-    void init(const String& p_name, const String& p_description, int p_total_steps);
-    void set_state_name(const String& p_name);
-    void set_current(int p_value);
-    void step();
-    void finish();
+    void step(const String&p_state, int p_step = -1);
 };
 
-#endif
+class EditorProgressDialog : public PopupPanel {
+    // TODO: 是否需要GDCLASS?
+private:
+    MarginContainer * main;
+    Label * title_label;
+    ProgressBar * progress_bar;
+
+    HashMap<String, int> tasks; // task_name -> total steps
+
+    static EditorProgressDialog* singleton;
+private:
+    void update_internal(const String& p_name, const String& p_state, int p_total, int p_current);
+
+public:
+    void add(const String& p_task_name, int p_total);
+    void update(const String& p_task_name, const String&p_state, int p_current);
+    void finish(const String& p_task_name);
+
+public:
+    EditorProgressDialog();
+    ~EditorProgressDialog();
+
+    static EditorProgressDialog *get_singleton() {return singleton;}
+};
+
+};
+
+#endif // GODOTJS_EDITOR_PROGRESS_H

@@ -108,9 +108,16 @@ namespace jsb::internal
         {
             jsb_check((size_t)(int) uncompressed_size_ == uncompressed_size_);
             jsb_check((size_t)(int) data_size_ == data_size_);
-            uncompressed_data_.resize((int) uncompressed_size_);
-            const int ret = Compression::decompress(uncompressed_data_.ptrw(), (int) uncompressed_size_, (const uint8_t*) data_, (int) data_size_, Compression::MODE_DEFLATE);
-            jsb_ensure(ret != -1);
+
+            // TODO: 调整生成的数据，考虑直接生成 PackedByteArray，避免内存拷贝
+            PackedByteArray data;
+            data.resize((int) data_size_);
+            memcpy(data.ptrw(), (const uint8_t*) data_, (int) data_size_);
+
+            const PackedByteArray& decompressed = data.decompress(uncompressed_size_, FileAccess::COMPRESSION_DEFLATE);
+
+            uncompressed_data_.resize(decompressed.size());
+            memcpy(uncompressed_data_.ptrw(), (const uint8_t*) decompressed.ptr(), decompressed.size());
         }
     };
 }

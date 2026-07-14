@@ -3,11 +3,13 @@
 #include "jsb_script_instance.h"
 #include "../internal/jsb_path_util.h"
 
+#include <godot_cpp/classes/resource_loader.hpp>
+
 GodotJSScript::GodotJSScript(): script_list_(this)
 {
     {
         JSB_BENCHMARK_SCOPE(GodotJSScript, Construct);
-        MutexLock lock(GodotJSScriptLanguage::get_singleton()->mutex_);
+        std::lock_guard<std::mutex> lock(GodotJSScriptLanguage::get_singleton()->mutex_);
         GodotJSScriptLanguage::get_singleton()->script_list_.add(&script_list_);
     }
     JSB_LOG(VeryVerbose, "new GodotJSScript addr:%d", (uintptr_t) this);
@@ -19,23 +21,23 @@ GodotJSScript::~GodotJSScript()
 
     {
         JSB_BENCHMARK_SCOPE(GodotJSScript, Destruct);
-        MutexLock lock(GodotJSScriptLanguage::get_singleton()->mutex_);
+        std::lock_guard lock(GodotJSScriptLanguage::get_singleton()->mutex_);
 
         script_list_.remove_from_list();
     }
 }
 
-// GDScript::can_instantiate()
-bool GodotJSScript::can_instantiate() const
+// ScriptExtension::_can_instantiate()
+bool GodotJSScript::_can_instantiate() const
 {
 #ifdef TOOLS_ENABLED
-    return is_valid() && (is_tool() || ScriptServer::is_scripting_enabled());
+    return _is_valid() && _is_tool(); //  (is_tool() || ScriptServer::is_scripting_enabled())
 #else
-    return is_valid();
+    return _is_valid();
 #endif
 }
 
-void GodotJSScript::set_source_code(const String& p_code)
+void GodotJSScript::_set_source_code(const String& p_code)
 {
     if (source_ == p_code) return;
 
@@ -45,12 +47,7 @@ void GodotJSScript::set_source_code(const String& p_code)
 #endif
 }
 
-void GodotJSScript::set_path(const String& p_path, bool p_take_over)
-{
-    super::set_path(p_path, p_take_over);
-}
-
-Ref<Script> GodotJSScript::get_base_script() const
+Ref<Script> GodotJSScript::_get_base_script() const
 {
     ensure_module_loaded();
     //jsb_notice(loaded_, "script not loaded");
@@ -59,13 +56,13 @@ Ref<Script> GodotJSScript::get_base_script() const
     return base;
 }
 
-StringName GodotJSScript::get_global_name() const
+StringName GodotJSScript::_get_global_name() const
 {
     ensure_module_loaded();
-    return is_valid() ? script_class_info_.js_class_name : StringName();
+    return _is_valid() ? script_class_info_.js_class_name : StringName();
 }
 
-bool GodotJSScript::inherits_script(const Ref<Script>& p_script) const
+bool GodotJSScript::_inherits_script(const Ref<Script>& p_script) const
 {
     jsb_check(loaded_);
 
@@ -77,21 +74,21 @@ bool GodotJSScript::inherits_script(const Ref<Script>& p_script) const
 }
 
 // this method is called in `EditorStandardSyntaxHighlighter::_update_cache()` without checking `script->is_valid()`
-StringName GodotJSScript::get_instance_base_type() const
+StringName GodotJSScript::_get_instance_base_type() const
 {
     ensure_module_loaded();
-    return is_valid() ? script_class_info_.native_class_name : StringName();
+    return _is_valid() ? script_class_info_.native_class_name : StringName();
 }
 
 ScriptInstance* GodotJSScript::instance_and_native_object_create(const v8::Local<v8::Object>& p_this, bool p_is_temp_allowed)
 {
     ensure_module_loaded();
-    if (jsb_unlikely(!loaded_ || !_is_valid()))
+    if (jsb_unlikely(!loaded_ || !is_valid_internal()))
     {
         JSB_LOG(Error, "cannot instantiate native object for invalid script: %s", get_path());
         return nullptr;
     }
-    jsb_check(_is_valid());
+    jsb_check(is_valid_internal());
     jsb_check(loaded_);
 
     Object* owner = ClassDB::instantiate(script_class_info_.native_class_name);
@@ -106,12 +103,12 @@ ScriptInstance* GodotJSScript::instance_and_native_object_create(const v8::Local
 ScriptInstance* GodotJSScript::instance_create(const v8::Local<v8::Object>& p_this, Object* p_owner, bool p_is_temp_allowed)
 {
     ensure_module_loaded();
-    if (jsb_unlikely(!loaded_ || !_is_valid()))
+    if (jsb_unlikely(!loaded_ || !is_valid_internal()))
     {
         JSB_LOG(Error, "cannot create script instance from invalid script: %s", get_path());
         return nullptr;
     }
-    jsb_check(_is_valid());
+    jsb_check(is_valid_internal());
     jsb_check(loaded_);
 
     jsb::JSEnvironment env(get_path(), p_is_temp_allowed);
@@ -121,27 +118,26 @@ ScriptInstance* GodotJSScript::instance_create(const v8::Local<v8::Object>& p_th
     const jsb::NativeClassID native_class_id = env->get_script_class(module->script_class_id)->native_class_id;
 
     /* STEP 1, CREATE */
-    GodotJSScriptInstance* instance = memnew(GodotJSScriptInstance);
-
-    instance->owner_ = p_owner;
-    instance->script_ = Ref(this); // must set before 'set_script_instance'
-    instance->env_ = env;
-    instance->class_id_ = module->script_class_id;
-    instance->owner_->set_script_instance(instance);
+    GodotJSScriptInstance* instance = memnew(GodotJSScriptInstance(
+        Ref(this), 
+        p_owner, 
+        env,
+        module->script_class_id));
+    ScriptInstance::set_script_instance(instance->get_owner(), instance);
 
     /* STEP 2, INITIALIZE AND CONSTRUCT */
     {
-        MutexLock lock(GodotJSScriptLanguage::get_singleton()->mutex_);
+        std::lock_guard<std::mutex> lock(GodotJSScriptLanguage::get_singleton()->mutex_);
         instances_.insert(p_owner);
     }
     instance->object_id_ = env->bind_godot_object(native_class_id, p_owner, p_this);
     if (!instance->object_id_)
     {
         instance->script_ = Ref<GodotJSScript>();
-        instance->owner_->set_script_instance(nullptr);
+        ScriptInstance::set_script_instance(instance->owner_, nullptr);
         //NOTE `instance` becomes an invalid pointer since it's deleted in `set_script_instance`
         {
-            MutexLock lock(GodotJSScriptLanguage::get_singleton()->mutex_);
+            std::lock_guard lock(GodotJSScriptLanguage::get_singleton()->mutex_);
             instances_.erase(p_owner);
         }
         JSB_LOG(Error, "Error constructing a GodotJSScriptInstance for %s (%s)", script_class_info_.js_class_name, script_class_info_.module_id);
@@ -154,32 +150,30 @@ ScriptInstance* GodotJSScript::instance_create(const v8::Local<v8::Object>& p_th
 ScriptInstance* GodotJSScript::instance_construct(Object* p_this, bool p_is_temp_allowed, const Variant** p_args, int p_argcount)
 {
     ensure_module_loaded();
-    if (jsb_unlikely(!loaded_ || !_is_valid()))
+    if (jsb_unlikely(!loaded_ || !is_valid_internal()))
     {
         JSB_LOG(Error, "cannot construct script instance from invalid script: %s", get_path());
         return nullptr;
     }
-    jsb_check(_is_valid());
+    jsb_check(is_valid_internal());
     jsb_check(loaded_);
     JSB_LOG(Verbose, "create instance %d of %s(%s)", (uintptr_t) p_this, script_class_info_.native_class_name, script_class_info_.module_id);
 
-    if (!ClassDB::is_parent_class(p_this->get_class_name(), script_class_info_.native_class_name))
+    if (!ClassDB::is_parent_class(p_this->get_class(), script_class_info_.native_class_name))
     {
-        JSB_LOG(Error, "GodotJS class %s (%s) cannot be instantiated for a %s, it requires a %s", script_class_info_.js_class_name, script_class_info_.module_id, p_this->get_class_name(), script_class_info_.native_class_name);
+        JSB_LOG(Error, "GodotJS class %s (%s) cannot be instantiated for a %s, it requires a %s", script_class_info_.js_class_name, script_class_info_.module_id, p_this->get_class(), script_class_info_.native_class_name);
         return nullptr;
     }
 
     jsb::JSEnvironment env(get_path(), p_is_temp_allowed);
     if (env.is_shadow())
     {
-        GodotJSShadowScriptInstance* shadow_instance = memnew(GodotJSShadowScriptInstance);
-        shadow_instance->owner_ = p_this;
-        shadow_instance->script_ = Ref(this);
+        ScriptInstance* shadow_instance = memnew(GodotJSShadowScriptInstance(Ref(this), p_this));
 
         // ensure `GodotJSScript::instance_has(obj)` works properly even if a shadow instance is used.
         {
-            MutexLock lock(GodotJSScriptLanguage::get_singleton()->mutex_);
-            instances_.insert(shadow_instance->owner_);
+            std::lock_guard<std::mutex> lock(GodotJSScriptLanguage::get_singleton()->mutex_);
+            instances_.insert(shadow_instance->get_owner());
         }
         return shadow_instance;
     }
@@ -189,17 +183,17 @@ ScriptInstance* GodotJSScript::instance_construct(Object* p_this, bool p_is_temp
     jsb_ensuref(module && err == OK, "JS Module not found: %s", script_class_info_.module_id);
 
     /* STEP 1, CREATE */
-    GodotJSScriptInstance* instance = memnew(GodotJSScriptInstance);
+    GodotJSScriptInstance* instance = memnew(GodotJSScriptInstance(
 
-    instance->owner_ = p_this;
-    instance->script_ = Ref(this); // must set before 'set_script_instance'
-    instance->env_ = env;
-    instance->class_id_ = module->script_class_id;
-    instance->owner_->set_script_instance(instance);
+        Ref(this), 
+        p_this, 
+        env, 
+        module->script_class_id));
+    ScriptInstance::set_script_instance(instance->owner_, instance);
 
     /* STEP 2, INITIALIZE AND CONSTRUCT */
     {
-        MutexLock lock(GodotJSScriptLanguage::get_singleton()->mutex_);
+        std::lock_guard lock(GodotJSScriptLanguage::get_singleton()->mutex_);
         instances_.insert(instance->owner_);
     }
 
@@ -208,10 +202,10 @@ ScriptInstance* GodotJSScript::instance_construct(Object* p_this, bool p_is_temp
     if (!instance->object_id_)
     {
         instance->script_ = Ref<GodotJSScript>();
-        instance->owner_->set_script_instance(nullptr);
+        ScriptInstance::set_script_instance(instance->owner_, nullptr);
         //NOTE `instance` becomes an invalid pointer since it's deleted in `set_script_instance`
         {
-            MutexLock lock(GodotJSScriptLanguage::get_singleton()->mutex_);
+            std::lock_guard lock(GodotJSScriptLanguage::get_singleton()->mutex_);
             instances_.erase(p_this);
         }
         JSB_LOG(Error, "Error constructing a GodotJSScriptInstance for %s (%s)", script_class_info_.js_class_name, script_class_info_.module_id);
@@ -223,14 +217,14 @@ ScriptInstance* GodotJSScript::instance_construct(Object* p_this, bool p_is_temp
     return instance;
 }
 
-Error GodotJSScript::reload(bool p_keep_state)
+Error GodotJSScript::_reload(bool p_keep_state)
 {
-    if (!loaded_) return OK;
-    if (!_is_valid()) return ERR_UNAVAILABLE;
+    if (!loaded_) return OK; // TODO: 这里堵死了怎么 reload ?
+    if (!is_valid_internal()) return ERR_UNAVAILABLE;
 
     if (!p_keep_state)
     {
-        MutexLock lock(GodotJSScriptLanguage::get_singleton()->mutex_);
+        std::lock_guard lock(GodotJSScriptLanguage::get_singleton()->mutex_);
         if (instances_.size())
         {
             return ERR_ALREADY_IN_USE;
@@ -264,69 +258,94 @@ Error GodotJSScript::reload(bool p_keep_state)
 }
 
 #ifdef TOOLS_ENABLED
-#if GODOT_4_4_OR_NEWER
-StringName GodotJSScript::get_doc_class_name() const
+StringName GodotJSScript::_get_doc_class_name() const
 {
     //TODO not verified
-    Vector<DocData::ClassDoc> docs = get_documentation();
-    if (!docs.is_empty()) return docs[0].name;
+    TypedArray<Dictionary> docs = _get_documentation();
+    if (!docs.is_empty()) return docs[0].operator Dictionary()["name"];
     return {};
 }
-#endif
 
-Vector<DocData::ClassDoc> GodotJSScript::get_documentation() const
+TypedArray<Dictionary> GodotJSScript::_get_documentation() const
 {
     ensure_module_loaded();
-    if (!loaded_ || !_is_valid()) return {};
+    if (!loaded_ || !is_valid_internal()) return {};
 
     String base_type;
-    const String class_name = GodotJSScriptLanguage::get_singleton()->get_global_class_name(get_path(), &base_type);
-    DocData::ClassDoc class_doc_data;
+    const String class_name = GodotJSScriptLanguage::get_singleton()->_get_global_class_name(get_path())["base_type"];
+    Dictionary class_doc;
+    class_doc["name"] = class_name;
+    class_doc["inherits"] = base_type.is_empty() ? Variant("Object") : Variant(base_type);
+    class_doc["is_script_doc"] = true;
+    class_doc["brief_description"] = script_class_info_.doc.brief_description;
+    class_doc["is_deprecated"] = script_class_info_.doc.is_deprecated;
+    class_doc["is_experimental"] = script_class_info_.doc.is_experimental;
+    class_doc["deprecated_message"] = script_class_info_.doc.deprecated_message;
+    class_doc["experimental_message"] = script_class_info_.doc.experimental_message;
+    class_doc["script_path"] = get_path();
 
-    class_doc_data.name = class_name;
-    class_doc_data.inherits = base_type.is_empty() ? "Object" : base_type;
-    class_doc_data.is_script_doc = true;
-    class_doc_data.brief_description = script_class_info_.doc.brief_description;
-    class_doc_data.is_deprecated = script_class_info_.doc.is_deprecated;
-    class_doc_data.is_experimental = script_class_info_.doc.is_experimental;
-#if GODOT_4_3_OR_NEWER
-    class_doc_data.deprecated_message = script_class_info_.doc.deprecated_message;
-    class_doc_data.experimental_message = script_class_info_.doc.experimental_message;
-#endif
-    class_doc_data.script_path = get_path();
+    TypedArray<Dictionary> properties;
     for (const auto& item : script_class_info_.properties)
     {
-        DocData::PropertyDoc property_doc_data;
-        property_doc_data.name = item.key;
-        property_doc_data.description = item.value.doc.brief_description;
-        property_doc_data.is_deprecated = item.value.doc.is_deprecated;
-        property_doc_data.is_experimental = item.value.doc.is_experimental;
-#if GODOT_4_3_OR_NEWER
-        property_doc_data.deprecated_message = item.value.doc.deprecated_message;
-        property_doc_data.experimental_message = item.value.doc.experimental_message;
-#endif
-        class_doc_data.properties.append(property_doc_data);
+        Dictionary prop_doc;
+        prop_doc["name"] = item.key;
+        prop_doc["description"] = item.value.doc.brief_description;
+        prop_doc["is_deprecated"] = item.value.doc.is_deprecated;
+        prop_doc["is_experimental"] = item.value.doc.is_experimental;
+        prop_doc["deprecated_message"] = item.value.doc.deprecated_message;
+        prop_doc["experimental_message"] = item.value.doc.experimental_message;
+        properties.push_back(prop_doc);
     }
+    class_doc["properties"] = properties;
 
-    return { class_doc_data };
+    TypedArray<Dictionary> methods;
+    for (const auto& item : script_class_info_.methods)
+    {
+        Dictionary method_doc;
+        method_doc["name"] = item.key;
+        // TODO: 填充完整函数文档
+        methods.push_back(method_doc);
+    }
+    class_doc["methods"] = methods;
+
+    TypedArray<Dictionary> docs;
+    docs.push_back(class_doc);
+    return docs;
 }
 
-String GodotJSScript::get_class_icon_path() const
+String GodotJSScript::_get_class_icon_path() const
 {
     ensure_module_loaded();
     jsb_check(loaded_);
     return script_class_info_.icon;
 }
 
-PropertyInfo GodotJSScript::get_class_category() const
-{
+PropertyInfo GodotJSScript::get_class_category() const {
     ensure_module_loaded();
     jsb_check(loaded_);
-    return super::get_class_category();
-}
-#endif // TOOLS_ENABLED
 
-bool GodotJSScript::has_method(const StringName& p_method) const
+    String path = get_path();
+    String scr_name;
+
+    if (is_built_in()) {
+        if (get_name().is_empty()) {
+            scr_name = TTR("Built-in script");
+        } else {
+            scr_name = vformat("%s (%s)", get_name(), TTR("Built-in"));
+        }
+    } else {
+        if (get_name().is_empty()) {
+            scr_name = path.get_file();
+        } else {
+            scr_name = get_name();
+        }
+    }
+
+    return PropertyInfo(Variant::NIL, scr_name, PROPERTY_HINT_NONE, path, PROPERTY_USAGE_CATEGORY);
+}
+#endif
+
+bool GodotJSScript::_has_method(const StringName& p_method) const
 {
     ensure_module_loaded();
     jsb_check(loaded_);
@@ -343,12 +362,12 @@ bool GodotJSScript::has_method(const StringName& p_method) const
     {
         //TODO temp fix
         if (!current->loaded_) const_cast<GodotJSScript*>(current)->load_module_immediately();
-        if (current->is_valid() && current->script_class_info_.methods.has(exposed_name)) return true;
+        if (current->_is_valid() && current->script_class_info_.methods.has(exposed_name)) return true;
         current = current->base.ptr();
     }
 
     // ensure `_ready` called even if it's not actually defined in scripts
-    if (p_method == SceneStringNames::get_singleton()->_ready)
+    if (p_method == jsb_string_name(_ready))
     {
         // only a `Node` class has `_ready` call
         if (ClassDB::is_parent_class(get_instance_base_type(), jsb_string_name(Node)))
@@ -359,24 +378,24 @@ bool GodotJSScript::has_method(const StringName& p_method) const
     return false;
 }
 
-MethodInfo GodotJSScript::get_method_info(const StringName& p_method) const
+Dictionary GodotJSScript::_get_method_info(const StringName& p_method) const
 {
     jsb_check(loaded_);
-    jsb_check(has_method(p_method));
+    jsb_check(_has_method(p_method));
     //TODO details?
-    MethodInfo item = {};
-    item.name = p_method;
+    Dictionary item;
+    item["name"] = p_method;
     return item;
 }
 
-ScriptLanguage* GodotJSScript::get_language() const
+ScriptLanguage* GodotJSScript::_get_language() const
 {
     return GodotJSScriptLanguage::get_singleton();
 }
 
-bool GodotJSScript::has_script_signal(const StringName& p_signal) const
+bool GodotJSScript::_has_script_signal(const StringName& p_signal) const
 {
-    if (is_valid())
+    if (_is_valid())
     {
         if(script_class_info_.signals.has(p_signal))
         {
@@ -392,121 +411,129 @@ bool GodotJSScript::has_script_signal(const StringName& p_signal) const
     return false;
 }
 
-void GodotJSScript::get_script_signal_list(List<MethodInfo>* r_signals) const
+TypedArray<Dictionary> GodotJSScript::_get_script_signal_list() const
 {
-    if (!is_valid()) return;
+    TypedArray<Dictionary> result;
+    if (!_is_valid()) return result;
 
     for (const auto& it : script_class_info_.signals)
     {
         //TODO details?
-        MethodInfo item = {};
-        item.name = it.key;
-        r_signals->push_back(item);
+        Dictionary item;
+        item["name"] = it.key;
+        result.push_back(item);
     }
 
     if (base.is_valid())
     {
-        base->get_script_signal_list(r_signals);
+        // TODO: 添加引用版本,避免创建新的 数组
+        TypedArray<Dictionary> base_signals = base->_get_script_signal_list();
+        result.append_array(base_signals);
     }
+    return result;
 }
 
-void GodotJSScript::get_script_method_list(List<MethodInfo>* p_list) const
+TypedArray<Dictionary> GodotJSScript::_get_script_method_list() const
 {
     ensure_module_loaded();
     jsb_check(loaded_);
+    TypedArray<Dictionary> result;
 
     for (const auto& it : script_class_info_.methods)
     {
-        //TODO details?
-        MethodInfo item = {};
-        item.name = it.key;
-        p_list->push_back(item);
+        Dictionary item;
+        item["name"] = it.key;
+        result.push_back(item);
     }
 
-    if (base.is_valid() && base->is_valid())
+    if (base.is_valid() && base->_is_valid())
     {
-        base->get_script_method_list(p_list);
+        // TODO: 添加引用版本,避免创建新的 数组
+        TypedArray<Dictionary> base_methods = base->_get_script_method_list();
+        result.append_array(base_methods);
     }
+    return result;
 }
 
-void GodotJSScript::get_script_property_list(List<PropertyInfo>* p_list) const
+TypedArray<Dictionary> GodotJSScript::_get_script_property_list() const
 {
     ensure_module_loaded();
     jsb_check(loaded_);
+    TypedArray<Dictionary> result;
 
 #ifdef TOOLS_ENABLED
-    p_list->push_back(get_class_category());
+    result.push_back(get_class_category().operator Dictionary());
 #endif
     for (const auto& it : script_class_info_.properties)
     {
-        p_list->push_back((PropertyInfo) it.value);
+        result.push_back(((PropertyInfo) it.value).operator Dictionary());
     }
 
-    if (base.is_valid() && base->is_valid())
+    if (base.is_valid() && base->_is_valid())
     {
-        base->get_script_property_list(p_list);
+        // TODO: 添加引用版本,避免创建新的 数组
+        TypedArray<Dictionary> base_props = base->_get_script_property_list();
+        result.append_array(base_props);
     }
+    return result;
 }
 
-bool GodotJSScript::get_property_default_value(const StringName& p_property, Variant& r_value) const
+Variant GodotJSScript::_get_property_default_value(const StringName& p_property) const
 {
     ensure_module_loaded();
     if (const HashMap<StringName, Variant>::ConstIterator it = member_default_values_cache.find(p_property))
     {
-        r_value = it->value;
-        return true;
+        return it->value;
     }
 
-    return base.is_valid() && base->is_valid()
-        ? base->get_property_default_value(p_property, r_value)
-        : false;
+    if (base.is_valid() && base->_is_valid())
+    {
+        return base->_get_property_default_value(p_property);
+    }
+    return Variant();
 }
 
-#if GODOT_4_5_OR_NEWER
-const Variant GodotJSScript::get_rpc_config() const
-#elif GODOT_4_4_OR_NEWER
-Variant GodotJSScript::get_rpc_config() const
-#else
-const Variant GodotJSScript::get_rpc_config() const
-#endif
+Variant GodotJSScript::_get_rpc_config() const
 {
     ensure_module_loaded();
     jsb_check(loaded_);
 
-    return script_class_info_.rpc_config;
+    return script_class_info_.rpc_config; // TODO: 是否需要包含父类？
 }
 
-bool GodotJSScript::has_static_method(const StringName& p_method) const
+bool GodotJSScript::_has_static_method(const StringName& p_method) const
 {
     ensure_module_loaded();
-    jsb_check(loaded_);
-    //TODO
-    return false;
+    if (!_is_valid()) return false;
+    // TODO: 当前 ScriptInfo 中似乎不包含静态函数信息
+    return false; // script_class_info_.methods.has(p_method);
 }
 
-bool GodotJSScript::instance_has(const Object* p_this) const
+#ifndef DISABLE_DEPRECATED
+bool GodotJSScript::_instance_has(Object* p_this) const
 {
     jsb_check(loaded_);
-    MutexLock lock(GodotJSScriptLanguage::get_singleton()->mutex_);
-    return instances_.has(const_cast<Object*>(p_this));
+    std::lock_guard lock(GodotJSScriptLanguage::get_singleton()->mutex_);
+    return instances_.has(p_this);
 }
+#endif // !DISABLE_DEPRECATED
 
 Error GodotJSScript::load_source_code(const String &p_path)
 {
-    Error err;
 #ifdef TOOLS_ENABLED
-	const String source_code = FileAccess::get_file_as_string(p_path, &err);
+	const String source_code = FileAccess::get_file_as_string(p_path);
 #else
 
 #if JSB_USE_TYPESCRIPT
 	const String path = jsb::internal::PathUtil::convert_typescript_path(p_path);
-	const String source_code = FileAccess::get_file_as_string(path, &err);
+	const String source_code = FileAccess::get_file_as_string(path);
 #else
 	const String path = jsb::internal::PathUtil::convert_javascript_path(p_path);
-	const String source_code = FileAccess::get_file_as_string(path, &err);
+	const String source_code = FileAccess::get_file_as_string(path);
 #endif
 
 #endif
+    Error err = FileAccess::get_open_error();
     if (err != OK)
     {
         JSB_LOG(Warning, "can not read source from %s", p_path);
@@ -520,7 +547,7 @@ Error GodotJSScript::load_source_code(const String &p_path)
 
 void GodotJSScript::load_module_if_missing()
 {
-    if (!loaded_ || _is_valid()) return;
+    if (!loaded_ || is_valid_internal()) return;
 
     JSB_LOG(Verbose, "force to load missing script %s", get_path());
     loaded_ = false;
@@ -543,7 +570,7 @@ void GodotJSScript::load_module_immediately()
     {
         script_class_info_ = {};
 #ifdef TOOLS_ENABLED
-        if (FileAccess::exists(get_path()) && !FileAccess::exists(path))
+        if (FileAccess::file_exists(get_path()) && !FileAccess::file_exists(path))
         {
             JSB_LOG(Error,
                 "the javascript file is missing: %s (source: %s), "
@@ -561,13 +588,13 @@ void GodotJSScript::load_module_immediately()
         const jsb::ScriptClassInfoPtr class_info_ptr = env->find_script_class(module->script_class_id);
         script_class_info_ = class_info_ptr ? (jsb::StatelessScriptClassInfo) *class_info_ptr : jsb::StatelessScriptClassInfo();
     }
-    if (_is_valid())
+    if (is_valid_internal())
     {
         JSB_LOG(VeryVerbose, "GodotJSScript module loaded %s", path);
         {
             //TODO a dirty but approaching solution for hot-reloading
             //TODO will crash if reloading script instances in worker threads
-            MutexLock lock(GodotJSScriptLanguage::get_singleton()->mutex_); // necessary?
+            std::lock_guard lock(GodotJSScriptLanguage::get_singleton()->mutex_); // necessary?
             for (RBSet<Object *>::Element *E = instances_.front(); E;)
             {
                 RBSet<Object *>::Element *N = E->next();
@@ -575,13 +602,13 @@ void GodotJSScript::load_module_immediately()
                 jsb_check(obj->get_script() == Ref(this));
                 jsb_check(env->verify_object(obj));
 
-                if (ClassDB::is_parent_class(env->get_script_class(module->script_class_id)->native_class_name, obj->get_class_name()))
+                if (ClassDB::is_parent_class(env->get_script_class(module->script_class_id)->native_class_name, obj->get_class()))
                 {
                     env->rebind(obj, module->script_class_id);
                 }
                 else
                 {
-                    JSB_LOG(Warning, "Cannot rebind class %s (%s) on %s, it requires a %s", script_class_info_.js_class_name, script_class_info_.module_id, obj->get_class_name(), env->get_script_class(module->script_class_id)->native_class_name);
+                    JSB_LOG(Warning, "Cannot rebind class %s (%s) on %s, it requires a %s", script_class_info_.js_class_name, script_class_info_.module_id, obj->get_class(), env->get_script_class(module->script_class_id)->native_class_name);
                     obj->set_script(Ref<Script>());
                 }
 
@@ -592,99 +619,99 @@ void GodotJSScript::load_module_immediately()
         // setup base script
         {
             //TODO do not rely on ResourceLoader
-            if (script_class_info_.base_script_module_id)
+            if (!script_class_info_.base_script_module_id.is_empty())
             {
                 jsb::JavaScriptModule* base_module = nullptr;
                 const Error err = env->load(script_class_info_.base_script_module_id, &base_module);
                 jsb_ensuref(base_module && err == OK, "JS Module not found: %s", script_class_info_.base_script_module_id);
-                const Ref<Resource> base_res = ResourceLoader::load(jsb::internal::PathUtil::convert_javascript_path(base_module->source_info.source_filepath));
+                const Ref<Resource> base_res = ResourceLoader::get_singleton()->load(jsb::internal::PathUtil::convert_javascript_path(base_module->source_info.source_filepath));
                 jsb_check(base_res->get_class() == jsb_typename(GodotJSScript));
                 base = base_res;
             }
         }
 
         // update the default value cache
-        update_exports();
+        _update_exports();
 #ifdef TOOLS_ENABLED
         // temp and tricky workaround to avoid missing doc when showing on inspector the first time after load
-        if (DocTools* doc_tools = EditorHelp::get_doc_data())
-        {
-            const Vector<DocData::ClassDoc> documentations = get_documentation();
-            for (int i = 0; i < documentations.size(); i++)
-            {
-                const DocData::ClassDoc& doc = documentations.get(i);
-                doc_tools->add_doc(doc);
-            }
-        }
+        // GDExtension 没有暴露 DocData/EditorHelp are not available in godot-cpp GDExtension
+        // TODO: 可以考虑调用 EditorFileSystem::update_file() 进行触发，是有必要吗？
+        // if (DocTools* doc_tools = EditorHelp::get_doc_data())
+        // {
+        //     const Vector<DocData::ClassDoc> documentations = get_documentation();
+        //     for (int i = 0; i < documentations.size(); i++)
+        //     {
+        //         const DocData::ClassDoc& doc = documentations.get(i);
+        //         doc_tools->add_doc(doc);
+        //     }
+        // }
 #endif
         return;
     }
     JSB_LOG(Debug, "a stub script loaded which does not contain a GodotJS class %s", path);
 }
 
-PlaceHolderScriptInstance* GodotJSScript::placeholder_instance_create(Object* p_this)
+GDExtensionScriptInstancePtr GodotJSScript::_instance_create(Object* p_for_object) const
+{ 
+    return const_cast<GodotJSScript*>(this)->instance_create(p_for_object)->get_extension_instance_ptr();
+}
+
+GDExtensionScriptInstancePtr GodotJSScript::_placeholder_instance_create(Object* p_this) const
 {
 #ifdef TOOLS_ENABLED
-    if (!is_valid())
+    if (!_is_valid())
     {
         JSB_LOG(Warning, "creating placeholder instance on invalid script (%s)", get_path());
     }
-    PlaceHolderScriptInstance *si = memnew(PlaceHolderScriptInstance(GodotJSScriptLanguage::get_singleton(), Ref<Script>(this), p_this));
-    placeholders.insert(si);
-    _update_exports(si);
-    return si;
+    PlaceholderScriptInstance *placeholder = memnew(PlaceholderScriptInstance(Ref(const_cast<GodotJSScript*>(this)), p_this));
+    const_cast<GodotJSScript*>(this)->placeholders.push_back(placeholder);
+    const_cast<GodotJSScript*>(this)->_update_exports_internal(placeholder);
+    return placeholder->get_extension_instance_ptr();
 #else
     return nullptr;
 #endif
 }
 
 #ifdef TOOLS_ENABLED
-void GodotJSScript::_placeholder_erased(PlaceHolderScriptInstance* p_placeholder)
+void GodotJSScript::_placeholder_erased(GDExtensionScriptInstancePtr p_placeholder)
 {
-    placeholders.erase(p_placeholder);
+    // 配合 ScriptLanguage 的 reload_scripts 进行逆向查找
+    for (auto i = placeholders.size() - 1; i >= 0; --i)
+    {
+        PlaceholderScriptInstance *placeholder = placeholders[i];
+        if (placeholder == p_placeholder)
+        {
+            placeholders[i] = placeholders[placeholders.size() - 1];
+            placeholders.resize(placeholders.size() - 1);
+            memdelete(placeholder);
+            return;
+        }
+    }
+
+    ERR_FAIL_MSG("GodotJSScript::_placeholder_erased: There may have some memory leak issue.");
 }
 #endif
 
-void GodotJSScript::update_exports()
+void GodotJSScript::_update_exports()
 {
     ensure_module_loaded();
     jsb_check(loaded_);
 #ifdef TOOLS_ENABLED
-    if (!is_valid()) return;
-    _update_exports(nullptr);
+    if (!_is_valid()) return;
+    _update_exports_internal(nullptr);
 #endif
 }
 
-void GodotJSScript::_update_exports_values(List<PropertyInfo>& r_props, HashMap<StringName, Variant>& r_values)
+
+Variant GodotJSScript::_new(const Variant** p_args, GDExtensionInt p_argcount, GDExtensionCallError &r_error)
 {
-    for (const KeyValue<StringName, Variant> &E : member_default_values_cache)
-    {
-        r_values[E.key] = E.value;
-    }
-
-#ifdef TOOLS_ENABLED
-    r_props.push_back(get_class_category());
-#endif
-    for (const PropertyInfo &E : members_cache)
-    {
-        r_props.push_back(E);
-    }
-
-    if (base.is_valid() && base->is_valid())
-    {
-        base->_update_exports_values(r_props, r_values);
-    }
-}
-
-Variant GodotJSScript::_new(const Variant** p_args, int p_argcount, Callable::CallError &r_error)
-{
-    if (!is_valid())
+    if (!_is_valid())
     {
         JSB_LOG(Error, "Unable to create new instance. The script was not properly loaded (%s)", get_path());
         return Variant();
     }
 
-    r_error.error = Callable::CallError::CALL_OK;
+    r_error.error = GDEXTENSION_CALL_OK;
     Object *owner = ClassDB::instantiate(script_class_info_.native_class_name);
 
     ScriptInstance *instance = instance_construct(owner, false, p_args, p_argcount);
@@ -698,10 +725,11 @@ Variant GodotJSScript::_new(const Variant** p_args, int p_argcount, Callable::Ca
     return owner;
 }
 
-bool GodotJSScript::_update_exports(PlaceHolderScriptInstance* p_instance_to_update)
+#ifdef TOOLS_ENABLED
+bool GodotJSScript::_update_exports_internal(PlaceholderScriptInstance *p_placeholder_instance_to_update)
 {
     // do not crash the engine if the script not loaded successfully
-    if (!is_valid())
+    if (!_is_valid())
     {
         JSB_LOG(Error, "script failed to load (%s)", get_path());
         return false;
@@ -737,7 +765,7 @@ bool GodotJSScript::_update_exports(PlaceHolderScriptInstance* p_instance_to_upd
                 env->get_default_property_value(*class_info, pi.name, default_value);
                 member_default_values_cache[pi.name] = default_value;
                 JSB_LOG(VeryVerbose, "GodotJS script default %s.%s = %s",
-                    _is_valid() ? script_class_info_.js_class_name : "(unknown)",
+                    is_valid_internal() ? script_class_info_.js_class_name : "(unknown)",
                     pi.name,
                     default_value);
             }
@@ -748,7 +776,7 @@ bool GodotJSScript::_update_exports(PlaceHolderScriptInstance* p_instance_to_upd
             for (const KeyValue<StringName, jsb::ScriptPropertyInfo> &pair : script_class_info_.properties)
             {
                 const jsb::ScriptPropertyInfo &pi = pair.value;
-                members_cache.push_back({ pi.type, pi.name, pi.hint, pi.hint_string, pi.usage, pi.class_name });
+                members_cache.push_back(pi); // 隐式 ScriptPropertyInfo 转换为 PropertyInfo
 
                 Variant default_value;
                 jsb::internal::VariantUtil::construct_variant(default_value, pi.type);
@@ -757,39 +785,55 @@ bool GodotJSScript::_update_exports(PlaceHolderScriptInstance* p_instance_to_upd
         }
     }
 
-    if (base.is_valid() && base->_update_exports(p_instance_to_update))
+    if (base.is_valid() && base->_update_exports_internal(p_placeholder_instance_to_update))
     {
         changed = true;
     }
 
-    if ((changed || p_instance_to_update) && placeholders.size())
+    if ((changed || p_placeholder_instance_to_update) && placeholders.size())
     {
-        List<PropertyInfo> props;
-        HashMap<StringName, Variant> values;
+        TypedArray<Dictionary> props;
+        Dictionary values;
         _update_exports_values(props, values);
 
         if (changed)
         {
-            for (PlaceHolderScriptInstance *s : placeholders)
+            for (PlaceholderScriptInstance* placeholder : placeholders)
             {
-                s->update(props, values);
+                placeholder->update(props, values);
             }
         }
         else
         {
-            p_instance_to_update->update(props, values);
+            p_placeholder_instance_to_update->update(props, values);
         }
     }
 
     return changed;
 }
 
+void GodotJSScript::_update_exports_values(TypedArray<Dictionary>& r_props, Dictionary& r_values)
+{
+    for (const KeyValue<StringName, Variant> &E : member_default_values_cache)
+    {
+        r_values[E.key] = E.value;
+    }
+
+#ifdef TOOLS_ENABLED
+    r_props.push_back(get_class_category().operator Dictionary());
+#endif
+    for (const PropertyInfo &E : members_cache)
+    {
+        r_props.push_back(E.operator Dictionary());
+    }
+
+    if (base.is_valid() && base->_is_valid())
+    {
+        base->_update_exports_values(r_props, r_values);
+    }
+}
+#endif // TOOLS_ENABLED
+
 void GodotJSScript::_bind_methods() {
     ClassDB::bind_vararg_method(METHOD_FLAGS_DEFAULT, "new", &GodotJSScript::_new, MethodInfo("new"));
-}
-
-void GodotJSScript::reload_from_file()
-{
-    //TODO reload, maybe it's OK?
-    reload(true);
 }

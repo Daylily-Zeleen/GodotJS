@@ -1,4 +1,4 @@
-﻿#ifndef GODOTJS_VARIANT_INFO_H
+#ifndef GODOTJS_VARIANT_INFO_H
 #define GODOTJS_VARIANT_INFO_H
 #include "jsb_macros.h"
 #include "jsb_variant_util.h"
@@ -22,7 +22,7 @@ namespace jsb::internal
 
     struct FBuiltinMethodInfo : FMethodInfoBase
     {
-        Variant::ValidatedBuiltInMethod builtin_func;
+        ValidatedBuiltInMethod builtin_func;
         Vector<Variant> default_arguments;
 
         jsb_force_inline bool check_argc(int p_argc) const
@@ -34,7 +34,7 @@ namespace jsb::internal
 
     struct FUtilityMethodInfo : FMethodInfoBase
     {
-        Variant::ValidatedUtilityFunction utility_func;
+        ValidatedUtilityFunction utility_func;
 
         jsb_force_inline bool check_argc(int p_argc) const
         {
@@ -44,14 +44,14 @@ namespace jsb::internal
 
     struct FGetSetInfo
     {
-        Variant::ValidatedSetter setter_func;
-        Variant::ValidatedGetter getter_func;
+        ValidatedSetter setter_func;
+        ValidatedGetter getter_func;
         Variant::Type type;
     };
 
     struct FConstructorVariantInfo
     {
-        Variant::ValidatedConstructor ctor_func;
+        ValidatedConstructor ctor_func;
 
         // argument types are cached here for better performance at runtime.
         Vector<Variant::Type> argument_types;

@@ -1,24 +1,12 @@
 #ifndef GODOTJS_VERSION_COMPARISON_H
 #define GODOTJS_VERSION_COMPARISON_H
 
-#define GODOT_VERSION_COMPARE(Current, MinExpected, ComparisonChain) (((Current) > (MinExpected)) || ((Current) == (MinExpected) && (ComparisonChain)))
+#define VERSION_COMPARE(Current, MinExpected, ComparisonChain) (((Current) > (MinExpected)) || ((Current) == (MinExpected) && (ComparisonChain)))
 
-#if __has_include(<godot_cpp/core/version.hpp>)
-#   include <godot_cpp/core/version.hpp>
-#else
-#   include "core/version.h"
-#endif
+#include <godot_cpp/core/version.hpp>
+#define GODOT_VERSION_NEWER_THAN(major, minor, patch) GODOT_VERSION_COMPARE(GODOT_VERSION_MAJOR, major, GODOT_VERSION_COMPARE(GODOT_VERSION_MINOR, minor, GODOT_VERSION_COMPARE(GODOT_VERSION_PATCH, patch, false)))
 
-#ifdef GODOT_VERSION_MAJOR // 4.5+ or GDExtension
-#   define GODOT_VERSION_NEWER_THAN(major, minor, patch) GODOT_VERSION_COMPARE(GODOT_VERSION_MAJOR, major, GODOT_VERSION_COMPARE(GODOT_VERSION_MINOR, minor, GODOT_VERSION_COMPARE(GODOT_VERSION_PATCH, patch, false)))
-#else
-#   define GODOT_VERSION_NEWER_THAN(major, minor, patch) GODOT_VERSION_COMPARE(VERSION_MAJOR, major, GODOT_VERSION_COMPARE(VERSION_MINOR, minor, GODOT_VERSION_COMPARE(VERSION_PATCH, patch, false)))
-#endif
-
-#define GODOT_4_3_OR_NEWER GODOT_VERSION_NEWER_THAN(4, 3, -1)
-#define GODOT_4_4_OR_NEWER GODOT_VERSION_NEWER_THAN(4, 4, -1)
-#define GODOT_4_5_OR_NEWER GODOT_VERSION_NEWER_THAN(4, 5, -1)
-#define GODOT_4_6_OR_NEWER GODOT_VERSION_NEWER_THAN(4, 6, -1)
+// NOTE: 以 Godot 4.7 为基准版本
 #define GODOT_4_7_OR_NEWER GODOT_VERSION_NEWER_THAN(4, 7, -1)
 
 #endif

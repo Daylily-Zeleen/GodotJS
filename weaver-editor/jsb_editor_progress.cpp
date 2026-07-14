@@ -1,45 +1,101 @@
 ﻿#include "jsb_editor_progress.h"
+#include "godot_cpp/classes/editor_interface.hpp"
+#include "godot_cpp/classes/label.hpp"
+#include "godot_cpp/classes/margin_container.hpp"
+#include "godot_cpp/classes/progress_bar.hpp"
+#include "godot_cpp/classes/v_box_container.hpp"
+#include "godot_cpp/core/math.hpp"
+#include "godot_cpp/variant/vector2i.hpp"
+#include "jsb_engine_compat.h"
 
-GodotJSEditorProgress::~GodotJSEditorProgress()
-{
-    if (progress_) memdelete(progress_);
+namespace godot {
+
+// ========= EditorProgress ===========
+EditorProgress::EditorProgress(const String &p_task_name, int p_total) : name(p_task_name) {
+	EditorProgressDialog::get_singleton()->add(p_task_name, p_total);
+}
+EditorProgress::~EditorProgress() {
+	EditorProgressDialog::get_singleton()->finish(name);
 }
 
-void GodotJSEditorProgress::_bind_methods()
-{
-    ClassDB::bind_method(D_METHOD("init", "name", "description", "total_steps"), &GodotJSEditorProgress::init);
-    ClassDB::bind_method(D_METHOD("set_state_name", "name"), &GodotJSEditorProgress::set_state_name);
-    ClassDB::bind_method(D_METHOD("set_current", "value"), &GodotJSEditorProgress::set_current);
-    ClassDB::bind_method(D_METHOD("step"), &GodotJSEditorProgress::step);
-    ClassDB::bind_method(D_METHOD("finish"), &GodotJSEditorProgress::finish);
+void EditorProgress::step(const String &p_state, int p_step) {
+	if (p_step < 0) {
+		current++;
+	} else {
+		current = p_step;
+	}
+	EditorProgressDialog::get_singleton()->update(name, p_state, current);
 }
 
-void GodotJSEditorProgress::init(const String& p_name, const String& p_description, int p_total_steps)
-{
-    jsb_ensure(!progress_);
-    progress_ = memnew(EditorProgress(p_name, p_description, p_total_steps));
-    progress_->step("", 0);
+// =========== EditorProgressDialog ============
+EditorProgressDialog *EditorProgressDialog::singleton{ nullptr };
+
+void EditorProgressDialog::update_internal(const String &p_task_name, const String &p_state, int p_total, int p_current) {
+	uint32_t total = Math::min(p_total, 1);
+	if (int *exists = tasks.getptr(p_task_name)) {
+		tasks[p_task_name] = Math::min(p_total, *exists);
+	} else {
+		tasks[p_task_name] = total;
+	}
+
+	title_label->set_name(p_task_name);
+	progress_bar->set_max(p_total);
+	progress_bar->set_value(Math::min(p_total, p_current));
+
+	if (is_visible()) {
+		return;
+	}
+
+	if (EditorInterface *ei = EditorInterface::get_singleton()) {
+		Vector2i min_size = main->get_combined_minimum_size();
+		min_size.x = Math::max(min_size.x, (int32_t)(500 * EDSCALE));
+		ei->popup_dialog_centered(this, min_size);
+	}
 }
 
-void GodotJSEditorProgress::set_state_name(const String& p_name)
-{
-    state_name_ = p_name;
+void EditorProgressDialog::add(const String &p_task_name, int p_total) {
+	update_internal(p_task_name, p_task_name, Math::max(p_total, 1), 0);
+}
+void EditorProgressDialog::update(const String &p_task_name, const String &p_state, int p_current) {
+	int *total = tasks.getptr(p_task_name);
+	update_internal(p_task_name, p_task_name, total ? *total : 1, 0);
+}
+void EditorProgressDialog::finish(const String &p_task_name) {
+	tasks.erase(p_task_name);
+	if (tasks.is_empty()) {
+		hide();
+	}
 }
 
-void GodotJSEditorProgress::set_current(int p_value)
-{
-    // it runs too slow if p_force_refresh.
-    // but be cautious that the internal value of task may not be modified if p_force_refresh is false.
-    if (progress_) progress_->step(state_name_, p_value, false);
+EditorProgressDialog::EditorProgressDialog() {
+	CRASH_COND_MSG(singleton, "EditorProgressDialog is instantiated twice?");
+	singleton = this;
+
+	set_exclusive(true);
+	hide();
+
+	main = memnew(MarginContainer);
+	main->add_theme_constant_override("margin_top", 10);
+	main->add_theme_constant_override("margin_left", 10);
+	main->add_theme_constant_override("margin_bottom", 10);
+	main->add_theme_constant_override("margin_right", 10);
+	add_child(main);
+
+	VBoxContainer *vbox = memnew(VBoxContainer);
+	main->add_child(vbox);
+
+	title_label = memnew(Label);
+	vbox->add_child(title_label);
+
+	progress_bar = memnew(ProgressBar);
+	progress_bar->set_h_size_flags(Control::SIZE_EXPAND_FILL);
+	progress_bar->set_show_percentage(true);
+	vbox->add_child(progress_bar);
 }
 
-void GodotJSEditorProgress::step()
-{
-    if (progress_) progress_->step(state_name_, false);
+EditorProgressDialog::~EditorProgressDialog() {
+	singleton = nullptr;
 }
+EditorProgressDialog *singleton{ nullptr };
 
-void GodotJSEditorProgress::finish()
-{
-    if (progress_) memdelete(progress_);
-    progress_ = nullptr;
-}
+}; //namespace godot

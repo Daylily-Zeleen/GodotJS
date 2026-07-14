@@ -136,6 +136,20 @@ namespace v8
         return Maybe<bool>(!!res);
     }
 
+    Maybe<bool> Object::Has(Local<Context> context, Local<Value> key) const
+    {
+        JSContext* ctx = isolate_->ctx();
+        const jsb::impl::QuickJS::Atom prop(ctx, (JSValue) key);
+        const int res = JS_HasProperty(ctx, (JSValue) *this, prop);
+
+        if (res == -1)
+        {
+            jsb::impl::QuickJS::MarkExceptionAsTrivial(isolate_->ctx());
+            return Maybe<bool>();
+        }
+        return Maybe<bool>(!!res);
+    }
+
     Maybe<bool> Object::SetPrototype(Local<Context> context, Local<Value> prototype)
     {
         JSContext* ctx = isolate_->ctx();
@@ -458,5 +472,96 @@ namespace v8
         }
         JS_FreeValue(ctx, rval);
         return Maybe<bool>(true);
+    }
+
+    Maybe<bool> Object::HasRealNamedProperty(Local<Context> context, Local<Name> key) const
+    {
+        JSContext* ctx = isolate_->ctx();
+        const jsb::impl::QuickJS::Atom prop(ctx, (JSValue) key);
+        const int res = JS_HasProperty(ctx, (JSValue) *this, prop);
+        if (res == -1)
+        {
+            jsb::impl::QuickJS::MarkExceptionAsTrivial(ctx);
+            return Maybe<bool>();
+        }
+        return Maybe<bool>(!!res);
+    }
+
+    MaybeLocal<Proxy> Proxy::New(Local<Context> context, Local<Object> target, Local<Object> handler)
+    {
+        Isolate* isolate = context->isolate_;
+        JSContext* ctx = isolate->ctx();
+
+#if JSB_PREFER_QUICKJS_NG
+        // quickjs-ng has native Proxy C API
+        const JSValue proxy = JS_NewProxy(ctx, (JSValue) target, (JSValue) handler);
+        if (JS_IsException(proxy))
+        {
+            jsb::impl::QuickJS::MarkExceptionAsTrivial(ctx);
+            return MaybeLocal<Proxy>();
+        }
+        const uint16_t stack_pos = isolate->push_steal(proxy);
+        return MaybeLocal<Proxy>(Data(isolate, stack_pos));
+#else
+        return MaybeLocal<Proxy>(Data(isolate, isolate->push_proxy((JSValue)target, (JSValue)handler)));
+#endif
+    }
+
+    Local<Object> Proxy::GetTarget() const
+    {
+        JSContext* ctx = isolate_->ctx();
+#if JSB_PREFER_QUICKJS_NG
+        const JSValue target = JS_GetProxyTarget(ctx, (JSValue) *this);
+#else
+        // For quickjs (non-ng), read the proxy target via JS
+        // Proxy isn't a true wrapper in non-ng; use JS_GetPropertyStr
+        const JSValue target = JS_GetPropertyStr(ctx, (JSValue)*this, "target");
+#endif
+        if (JS_IsException(target))
+        {
+            jsb::impl::QuickJS::MarkExceptionAsTrivial(ctx);
+            return Local<Object>();
+        }
+        return Local<Object>(Data(isolate_, isolate_->push_steal(target)));
+    }
+
+    MaybeLocal<Script> Script::Compile(Local<Context> context, Local<String> source)
+    {
+        Isolate* isolate = context->isolate_;
+        JSContext* ctx = isolate->ctx();
+
+        const char* src_str = JS_ToCStringLen(ctx, nullptr, (JSValue) source);
+        if (!src_str)
+        {
+            jsb::impl::QuickJS::MarkExceptionAsTrivial(ctx);
+            return MaybeLocal<Script>();
+        }
+
+        const JSValue func = JS_Eval(ctx, src_str, strlen(src_str), "<script>", JS_EVAL_FLAG_COMPILE_ONLY | JS_EVAL_TYPE_GLOBAL);
+        JS_FreeCString(ctx, src_str);
+
+        if (JS_IsException(func))
+        {
+            jsb::impl::QuickJS::MarkExceptionAsTrivial(ctx);
+            return MaybeLocal<Script>();
+        }
+
+        const uint16_t stack_pos = isolate->push_steal(func);
+        return MaybeLocal<Script>(Data(isolate, stack_pos));
+    }
+
+    MaybeLocal<Value> Script::Run(Local<Context> context)
+    {
+        JSContext* ctx = isolate_->ctx();
+        const JSValue func_obj = (JSValue) *this;
+        jsb_check(JS_IsFunction(ctx, func_obj));
+
+        const JSValue result = JS_EvalFunction(ctx, JS_DupValue(ctx, func_obj));
+        if (JS_IsException(result))
+        {
+            jsb::impl::QuickJS::MarkExceptionAsTrivial(ctx);
+            return MaybeLocal<Value>();
+        }
+        return MaybeLocal<Value>(Data(isolate_, isolate_->push_steal(result)));
     }
 }

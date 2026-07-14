@@ -2,10 +2,11 @@
 
 namespace jsb
 {
-    StringName JSCallable::get_method() const
-    {
-        return SNAME("JSFunction");
-    }
+    // TODO: 待 godot 暴露该接口
+    // StringName JSCallable::get_method() const
+    // {
+    //     return SNAME("JSFunction");
+    // }
 
     String JSCallable::get_as_text() const
     {
@@ -23,12 +24,12 @@ namespace jsb
         }
     }
 
-    void JSCallable::call(const Variant** p_arguments, int p_argcount, Variant& r_return_value, Callable::CallError& r_call_error) const
+    void JSCallable::call(const Variant** p_arguments, int p_argcount, Variant& r_return_value, GDExtensionCallError& r_call_error) const
     {
         const std::shared_ptr<jsb::Environment> env = jsb::Environment::_access(env_id_);
         if (!env)
         {
-            r_call_error.error = Callable::CallError::CALL_ERROR_INVALID_METHOD;
+            r_call_error.error = GDEXTENSION_CALL_ERROR_INVALID_METHOD;
             return;
         }
 

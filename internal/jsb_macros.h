@@ -95,7 +95,7 @@
 
 // help to trace the location of the throwing error in C++ code.
 #if JSB_DEBUG
-#   define jsb_throw(isolate, literal) impl::Helper::throw_error((isolate), "[" __FILE__ ":" JSB_STRINGIFY(__LINE__) "] " literal)
+#   define jsb_throw(isolate, literal) impl::Helper::throw_error((isolate), ::godot::String("[" __FILE__ ":" JSB_STRINGIFY(__LINE__) "] ") + (literal))
 #else
 #   define jsb_throw(isolate, literal) impl::Helper::throw_error((isolate), (literal))
 #endif

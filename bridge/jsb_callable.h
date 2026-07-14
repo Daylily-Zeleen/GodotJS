@@ -42,10 +42,10 @@ namespace jsb
          */
         virtual bool is_valid() const override { return object_id_.is_null() || jsb::compat::ObjectDB::get_instance(object_id_); }
 
-        virtual StringName get_method() const override;
+        // virtual StringName get_method() const override; // TODO: 待 godot 暴露该接口
         virtual String get_as_text() const override;
         virtual ObjectID get_object() const override { return object_id_; }
-        virtual void call(const Variant** p_arguments, int p_argcount, Variant& r_return_value, Callable::CallError& r_call_error) const override;
+        virtual void call(const Variant** p_arguments, int p_argcount, Variant& r_return_value, GDExtensionCallError& r_call_error) const override;
 
         virtual CompareEqualFunc get_compare_equal_func() const override { return _compare_equal; }
         virtual CompareLessFunc get_compare_less_func() const override { return _compare_less; }

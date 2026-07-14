@@ -43,6 +43,9 @@ namespace v8
         bool IsBigInt() const;
         bool IsExternal() const;
         bool IsArrayBuffer() const;
+#if JSB_PREFER_QUICKJS_NG
+        bool IsProxy() const;
+#endif // JSB_PREFER_QUICKJS_NG
 
     private:
         bool strict_eq(const Data& other) const;

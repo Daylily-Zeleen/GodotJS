@@ -2,9 +2,7 @@
 #define GODOTJS_CUSTOM_FIELD_H
 
 #include <cstdint>
-#include "core/variant/variant.h"
-#include "core/string/ustring.h"
-
+#include <godot_cpp/variant/string.hpp>
 namespace jsb::impl
 {
     struct CustomField
@@ -24,7 +22,7 @@ namespace jsb::impl
             HINT_SIZE = 1,
         };
 
-        String name;
+        godot::String name;
 
         union
         {
@@ -37,7 +35,7 @@ namespace jsb::impl
         Type type;
         HintFlags hint;
 
-        static CustomField value_u64(const String& p_name, const uint64_t p_value, const HintFlags p_flags = HINT_NONE)
+        static CustomField value_u64(const godot::String& p_name, const uint64_t p_value, const HintFlags p_flags = HINT_NONE)
         {
             CustomField cf;
             cf.name = p_name;
@@ -47,7 +45,7 @@ namespace jsb::impl
             return cf;
         }
 
-        static CustomField cap_u64(const String& p_name, const uint64_t p_used, const uint64_t p_max, const HintFlags p_flags = HINT_NONE)
+        static CustomField cap_u64(const godot::String& p_name, const uint64_t p_used, const uint64_t p_max, const HintFlags p_flags = HINT_NONE)
         {
             CustomField cf;
             cf.name = p_name;
@@ -58,7 +56,7 @@ namespace jsb::impl
             return cf;
         }
 
-        static CustomField value_i64(const String& p_name, const int64_t p_value, const HintFlags p_flags = HINT_NONE)
+        static CustomField value_i64(const godot::String& p_name, const int64_t p_value, const HintFlags p_flags = HINT_NONE)
         {
             CustomField cf;
             cf.name = p_name;
@@ -68,7 +66,7 @@ namespace jsb::impl
             return cf;
         }
 
-        static CustomField cap_i64(const String& p_name, const int64_t p_used, const int64_t p_max, const HintFlags p_flags = HINT_NONE)
+        static CustomField cap_i64(const godot::String& p_name, const int64_t p_used, const int64_t p_max, const HintFlags p_flags = HINT_NONE)
         {
             CustomField cf;
             cf.name = p_name;

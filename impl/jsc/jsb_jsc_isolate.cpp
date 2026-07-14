@@ -266,7 +266,7 @@ function(key, value, getter, setter) {
         Vector<jsb::impl::InternalData*> finalize_batch;
 
         {
-            MutexLock lock(pending_finalize_mutex_);
+            std::lock_guard<std::mutex> lock(pending_finalize_mutex_);
             finalize_batch = pending_finalize_;
             pending_finalize_.clear();
         }
@@ -489,7 +489,7 @@ function(key, value, getter, setter) {
             JSB_JSC_LOG(VeryVerbose, "remove internal data JSObject:%s id:%s", (uintptr_t) obj, (uintptr_t) data);
 
             {
-                MutexLock lock(isolate->pending_finalize_mutex_);
+                std::lock_guard lock(isolate->pending_finalize_mutex_);
                 isolate->pending_finalize_.push_back(data);
             }
         }

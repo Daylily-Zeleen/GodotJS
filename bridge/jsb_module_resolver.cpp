@@ -110,7 +110,7 @@ namespace jsb
     {
         // try .js
         const String js_path = internal::PathUtil::extends_with(p_module_id, "." JSB_JAVASCRIPT_EXT);
-        if (FileAccess::exists(js_path))
+        if (FileAccess::file_exists(js_path))
         {
             o_path = js_path;
             return true;
@@ -118,7 +118,7 @@ namespace jsb
 
         // try .cjs
         const String cjs_path = internal::PathUtil::extends_with(p_module_id, "." JSB_COMMONJS_EXT);
-        if (FileAccess::exists(cjs_path))
+        if (FileAccess::file_exists(cjs_path))
         {
             o_path = cjs_path;
             return true;
@@ -126,7 +126,7 @@ namespace jsb
 
         // try .mjs
         const String mjs_path = internal::PathUtil::extends_with(p_module_id, "." JSB_MODULE_EXT);
-        if (FileAccess::exists(mjs_path))
+        if (FileAccess::file_exists(mjs_path))
         {
             o_path = mjs_path;
             return true;
@@ -134,7 +134,7 @@ namespace jsb
 
         // try .json
         const String json_path = internal::PathUtil::extends_with(p_module_id, "." JSB_JSON_EXT);
-        if (FileAccess::exists(json_path))
+        if (FileAccess::file_exists(json_path))
         {
             o_path = json_path;
             return true;
@@ -274,14 +274,14 @@ namespace jsb
     bool DefaultModuleResolver::check_absolute_file_path(const String& p_module_id, ModuleSourceInfo& o_source_info)
     {
         // 1: module_id (we do not check it strictly here, but usually, it should already have a valid extension)
-        if (p_module_id.contains(".") && FileAccess::exists(p_module_id))
+        if (p_module_id.contains(".") && FileAccess::file_exists(p_module_id))
         {
             o_source_info.source_filepath = p_module_id;
             o_source_info.package_filepath = String();
             return true;
         }
 
-        const bool has_module_id_dir = DirAccess::exists(p_module_id);
+        const bool has_module_id_dir = DirAccess::dir_exists_absolute(p_module_id);
 
         // 2: implicit file path (module_id.js, module_id.cjs)
         if (String source_path; check_implicit_source_path(p_module_id, source_path))
@@ -301,7 +301,7 @@ namespace jsb
             }
 
             const String index_path = internal::PathUtil::combine(p_module_id, "index.js");
-            if (FileAccess::exists(index_path))
+            if (FileAccess::file_exists(index_path))
             {
                 o_source_info.source_filepath = index_path;
                 o_source_info.package_filepath = String();
@@ -314,7 +314,7 @@ namespace jsb
 
     bool DefaultModuleResolver::check_package_file_path(const String& p_package_path, const String& p_module_id, ModuleSourceInfo& o_source_info)
     {
-        if (!DirAccess::exists(p_package_path))
+        if (!DirAccess::dir_exists_absolute(p_package_path))
         {
             return false;
         }
@@ -329,13 +329,13 @@ namespace jsb
         {
             const String package_json_path = internal::PathUtil::combine(p_package_path, "package.json");
 
-            if (FileAccess::exists(package_json_path))
+            if (FileAccess::file_exists(package_json_path))
             {
                 const Ref<FileAccess> file = FileAccess::open(package_json_path, FileAccess::READ);
                 jsb_check(file.is_valid());
 
                 const Ref json = memnew(JSON);
-                Error error = json->parse(file->get_as_utf8_string());
+                Error error = json->parse(file->get_as_text());
                 if (error != OK)
                 {
                     JSB_LOG(Error, "failed to parse package.json (%d: %s)", json->get_error_line(), json->get_error_message());
@@ -354,7 +354,8 @@ namespace jsb
                     if (exports_type == Variant::DICTIONARY)
                     {
                         const Dictionary exports_dict = exports;
-                        const String first_key = exports_dict.get_key_at_index(0);
+                        const Array _keys = exports_dict.keys();
+                        const String first_key = _keys.size() > 0 ? String(_keys[0]) : String();
 
                         if (!first_key.begins_with("."))
                         {
@@ -424,7 +425,7 @@ namespace jsb
             return false;
         }
 
-        if (!FileAccess::exists(extracted_path))
+        if (!FileAccess::file_exists(extracted_path))
         {
             return false;
         }
@@ -483,11 +484,11 @@ namespace jsb
     {
         if (p_module_id[0] != '.')
         {
-            int package_name_slash_index = p_module_id.find_char('/');
+            int package_name_slash_index = p_module_id.find("/");
 
             if (p_module_id[0] == '@' && package_name_slash_index >= 0)
             {
-                package_name_slash_index = p_module_id.find_char('/', package_name_slash_index + 1);
+                package_name_slash_index = p_module_id.find("/", package_name_slash_index + 1);
             }
 
             String package_name = p_module_id.substr(0, package_name_slash_index);

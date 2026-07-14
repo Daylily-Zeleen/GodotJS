@@ -4,14 +4,14 @@
 // Not ideal. Need to clean up access.
 #include "../weaver/jsb_script_language.h"
 #include "../weaver/jsb_script.h"
-#include "modules/GodotJS/weaver/jsb_script_instance.h"
+#include "../weaver/jsb_script_instance.h"
 
 namespace jsb
 {
-    template<typename T>
+    template<typename ElemTy, typename PackedTy>
     static bool try_convert_array(v8::Isolate* isolate, const v8::Local<v8::Context>& context, v8::Local<v8::Value> p_val, Variant& r_packed)
     {
-        if constexpr (GetTypeInfo<T>::METADATA == GodotTypeInfo::METADATA_INT_IS_UINT8)
+        if constexpr (GetTypeInfo<ElemTy>::METADATA == GDEXTENSION_METHOD_ARGUMENT_METADATA_INT_IS_UINT8)
         {
             if (p_val->IsArrayBuffer())
             {
@@ -28,25 +28,29 @@ namespace jsb
 
         const v8::Local<v8::Array> array = p_val.As<v8::Array>();
         const uint32_t len = array->Length();
-        Vector<T> packed;
+        
+        PackedTy packed;
         packed.resize((int)len);
+        ElemTy* ptrw = packed.ptrw();
         for (uint32_t index = 0; index < len; ++index)
         {
             v8::Local<v8::Value> element;
             Variant element_var;
-            if (array->Get(context, index).ToLocal(&element) && TypeConvert::js_to_gd_var(isolate, context, element, GetTypeInfo<T>::VARIANT_TYPE, element_var))
+            if (array->Get(context, index).ToLocal(&element) && TypeConvert::js_to_gd_var(isolate, context, element, (Variant::Type) GetTypeInfo<ElemTy>::VARIANT_TYPE, element_var))
             {
-                packed.write[index] = element_var;
+                ptrw[index] = element_var;
             }
             else
             {
                 // be cautious here, we silently omit conversion failures
-                packed.write[index] = T {};
-                JSB_LOG(Warning, "failed to convert array element %d (strictly, as %s), it'll be left as the default value", index, Variant::get_type_name(GetTypeInfo<T>::VARIANT_TYPE));
+                ptrw[index] = ElemTy {};
+                JSB_LOG(Warning, "failed to convert array element %d (strictly, as %s), it'll be left as the default value", index, Variant::get_type_name((Variant::Type) GetTypeInfo<ElemTy>::VARIANT_TYPE));
             }
         }
+        
+        // GDExtension: Vector<T> cannot be assigned to Variant directly in godot-cpp 4.7
         r_packed = packed;
-        return true;
+        return false;
 #else
         return false;
 #endif
@@ -244,15 +248,16 @@ namespace jsb
                 return true;
             }
             goto FALLBACK_TO_VARIANT;  // NOLINT(cppcoreguidelines-avoid-goto, hicpp-avoid-goto)
-        case Variant::PACKED_BYTE_ARRAY:    if (try_convert_array<uint8_t>(isolate, context, p_jval, r_cvar)) return true; goto FALLBACK_TO_VARIANT;  // NOLINT(cppcoreguidelines-avoid-goto, hicpp-avoid-goto)
-        case Variant::PACKED_INT32_ARRAY:   if (try_convert_array<int32_t>(isolate, context, p_jval, r_cvar)) return true; goto FALLBACK_TO_VARIANT;  // NOLINT(cppcoreguidelines-avoid-goto, hicpp-avoid-goto)
-        case Variant::PACKED_INT64_ARRAY:   if (try_convert_array<int64_t>(isolate, context, p_jval, r_cvar)) return true; goto FALLBACK_TO_VARIANT;  // NOLINT(cppcoreguidelines-avoid-goto, hicpp-avoid-goto)
-        case Variant::PACKED_FLOAT32_ARRAY: if (try_convert_array<float>(isolate, context, p_jval, r_cvar))   return true; goto FALLBACK_TO_VARIANT;  // NOLINT(cppcoreguidelines-avoid-goto, hicpp-avoid-goto)
-        case Variant::PACKED_FLOAT64_ARRAY: if (try_convert_array<double>(isolate, context, p_jval, r_cvar))  return true; goto FALLBACK_TO_VARIANT;  // NOLINT(cppcoreguidelines-avoid-goto, hicpp-avoid-goto)
-        case Variant::PACKED_STRING_ARRAY:  if (try_convert_array<String>(isolate, context, p_jval, r_cvar))  return true; goto FALLBACK_TO_VARIANT;  // NOLINT(cppcoreguidelines-avoid-goto, hicpp-avoid-goto)
-        case Variant::PACKED_VECTOR2_ARRAY: if (try_convert_array<Vector2>(isolate, context, p_jval, r_cvar)) return true; goto FALLBACK_TO_VARIANT;  // NOLINT(cppcoreguidelines-avoid-goto, hicpp-avoid-goto)
-        case Variant::PACKED_VECTOR3_ARRAY: if (try_convert_array<Vector3>(isolate, context, p_jval, r_cvar)) return true; goto FALLBACK_TO_VARIANT;  // NOLINT(cppcoreguidelines-avoid-goto, hicpp-avoid-goto)
-        case Variant::PACKED_COLOR_ARRAY:   if (try_convert_array<Color>(isolate, context, p_jval, r_cvar))   return true; goto FALLBACK_TO_VARIANT;  // NOLINT(cppcoreguidelines-avoid-goto, hicpp-avoid-goto)
+        case Variant::PACKED_BYTE_ARRAY:    if (try_convert_array<uint8_t, PackedByteArray >(isolate, context, p_jval, r_cvar)) return true; goto FALLBACK_TO_VARIANT;  // NOLINT(cppcoreguidelines-avoid-goto, hicpp-avoid-goto)
+        case Variant::PACKED_INT32_ARRAY:   if (try_convert_array<int32_t, PackedInt32Array>(isolate, context, p_jval, r_cvar)) return true; goto FALLBACK_TO_VARIANT;  // NOLINT(cppcoreguidelines-avoid-goto, hicpp-avoid-goto)
+        case Variant::PACKED_INT64_ARRAY:   if (try_convert_array<int64_t, PackedInt64Array>(isolate, context, p_jval, r_cvar)) return true; goto FALLBACK_TO_VARIANT;  // NOLINT(cppcoreguidelines-avoid-goto, hicpp-avoid-goto)
+        case Variant::PACKED_FLOAT32_ARRAY: if (try_convert_array<float, PackedFloat32Array>(isolate, context, p_jval, r_cvar))   return true; goto FALLBACK_TO_VARIANT;  // NOLINT(cppcoreguidelines-avoid-goto, hicpp-avoid-goto)
+        case Variant::PACKED_FLOAT64_ARRAY: if (try_convert_array<double, PackedFloat64Array>(isolate, context, p_jval, r_cvar))  return true; goto FALLBACK_TO_VARIANT;  // NOLINT(cppcoreguidelines-avoid-goto, hicpp-avoid-goto)
+        case Variant::PACKED_STRING_ARRAY:  if (try_convert_array<String, PackedStringArray>(isolate, context, p_jval, r_cvar))  return true; goto FALLBACK_TO_VARIANT;  // NOLINT(cppcoreguidelines-avoid-goto, hicpp-avoid-goto)
+        case Variant::PACKED_VECTOR2_ARRAY: if (try_convert_array<Vector2, PackedVector2Array>(isolate, context, p_jval, r_cvar)) return true; goto FALLBACK_TO_VARIANT;  // NOLINT(cppcoreguidelines-avoid-goto, hicpp-avoid-goto)
+        case Variant::PACKED_VECTOR3_ARRAY: if (try_convert_array<Vector3, PackedVector3Array>(isolate, context, p_jval, r_cvar)) return true; goto FALLBACK_TO_VARIANT;  // NOLINT(cppcoreguidelines-avoid-goto, hicpp-avoid-goto)
+        case Variant::PACKED_COLOR_ARRAY:   if (try_convert_array<Color, PackedColorArray>(isolate, context, p_jval, r_cvar))   return true; goto FALLBACK_TO_VARIANT;  // NOLINT(cppcoreguidelines-avoid-goto, hicpp-avoid-goto)
+        case Variant::PACKED_VECTOR4_ARRAY: if (try_convert_array<Vector4, PackedVector4Array>(isolate, context, p_jval, r_cvar)) return true; goto FALLBACK_TO_VARIANT;  // NOLINT(cppcoreguidelines-avoid-goto, hicpp-avoid-goto)
         case Variant::ARRAY:                if (try_convert_array_any(isolate, context, p_jval, r_cvar))      return true; goto FALLBACK_TO_VARIANT;  // NOLINT(cppcoreguidelines-avoid-goto, hicpp-avoid-goto)
         // math types
         case Variant::VECTOR2:
@@ -383,6 +388,7 @@ namespace jsb
         case Variant::PACKED_VECTOR2_ARRAY:
         case Variant::PACKED_VECTOR3_ARRAY:
         case Variant::PACKED_COLOR_ARRAY:
+        case Variant::PACKED_VECTOR4_ARRAY:
             {
                 // nil var is considered as acceptable here (in the case of set_script_property_value called from godot scene state restoring)
                 jsb_checkf(p_cvar.get_type() == Variant::NIL || Variant::can_convert(p_cvar.get_type(), p_type),
@@ -427,18 +433,14 @@ namespace jsb
 
         // freshly bind existing gd object (not constructed in javascript)
 
-        ScriptInstance* si = p_godot_obj->get_script_instance();
-
-        if (si != nullptr && si->get_language() == GodotJSScriptLanguage::get_singleton() && !si->is_placeholder())
+        if (GodotJSScriptInstanceBase* si = ScriptInstance::get_script_instance<GodotJSScriptInstanceBase>(p_godot_obj))
         {
-            GodotJSScriptInstanceBase* script_instance = (GodotJSScriptInstanceBase*) si;
-
             // If the script_instance is NOT a shadow instance, then we're trying to access a GodotJS scripted object
             // from another thread than the one that owns it. That's not permitted.
-            jsb_check(script_instance->is_shadow());
+            jsb_check(si->is_shadow());
 
-            Ref<GodotJSScript> script = script_instance->get_script();
-            ScriptInstance* non_shadow_instance = script->instance_construct(p_godot_obj, false);
+            Ref<GodotJSScript> script = si->get_script();
+            ScriptInstance *non_shadow_instance = script->instance_construct(p_godot_obj, false);
 
             if (non_shadow_instance && environment->try_get_object(p_godot_obj, r_jval))
             {
@@ -446,18 +448,25 @@ namespace jsb
             }
         }
 
-        const StringName& class_name = p_godot_obj->get_class_name();
-        if (NativeClassID class_id;
-            NativeClassInfoPtr class_info = environment->expose_godot_object_class(ClassDB::classes.getptr(class_name), &class_id))
+        const StringName class_name = p_godot_obj->get_class();
+        if (ClassDBSingleton::get_singleton()->class_exists(class_name))
         {
-            // class_info ptr will be invalid after escape()
-            // to avoid possible side effects during `NewInstance`
-            r_jval = class_info.escape()->clazz.NewInstance(context);
-            jsb_check(TypeConvert::is_object(r_jval));
+            // TODO: 如何更高效
+            ClassDB::ClassInfo temp_info;
+            temp_info.name = class_name;
+            temp_info.parent_name = ClassDBSingleton::get_singleton()->get_parent_class(class_name);
+            if (NativeClassID class_id;
+                NativeClassInfoPtr class_info = environment->expose_godot_object_class(&temp_info, &class_id))
+            {
+                // class_info ptr will be invalid after escape()
+                // to avoid possible side effects during `NewInstance`
+                r_jval = class_info.escape()->clazz.NewInstance(context);
+                jsb_check(TypeConvert::is_object(r_jval));
 
-            // the lifecycle will be managed by javascript runtime, DO NOT DELETE it externally
-            environment->bind_godot_object(class_id, p_godot_obj, r_jval.As<v8::Object>());
-            return true;
+                // the lifecycle will be managed by javascript runtime, DO NOT DELETE it externally
+                environment->bind_godot_object(class_id, p_godot_obj, r_jval.As<v8::Object>());
+                return true;
+            }
         }
         JSB_LOG(Error, "failed to expose godot class '%s'", class_name);
         return false;
@@ -607,6 +616,7 @@ namespace jsb
         case Variant::PACKED_VECTOR2_ARRAY:
         case Variant::PACKED_VECTOR3_ARRAY:
         case Variant::PACKED_COLOR_ARRAY:
+        case Variant::PACKED_VECTOR4_ARRAY:
 #if JSB_IMPLICIT_PACKED_ARRAY_CONVERSION
             //TODO is loose conversion check for JS primitive array as Godot array a bad idea?
             if (p_val->IsArray()) return true; goto FALLBACK_TO_VARIANT;  // NOLINT(cppcoreguidelines-avoid-goto, hicpp-avoid-goto)

@@ -2,6 +2,8 @@
 #include "jsb_environment.h"
 #include "jsb_object_bindings.h"
 #include "jsb_type_convert.h"
+#include "../gen/core_constants.gen.h"
+#include "../gen/utility_functions_ext.gen.h"
 
 namespace jsb
 {
@@ -38,7 +40,7 @@ namespace jsb
         //     check before getting to avoid error prints in `get_singleton_object`
         if (Engine::get_singleton()->has_singleton(original_name))
         {
-            if (Object* gd_singleton = Engine::get_singleton()->get_singleton_object(original_name))
+            if (Object* gd_singleton = Engine::get_singleton()->get_singleton(original_name))
             {
                 JSB_LOG(VeryVerbose, "exposing singleton object %s", (String) original_name);
                 if (v8::Local<v8::Object> rval;
@@ -54,28 +56,28 @@ namespace jsb
         }
 
         // (2) (global) utility functions.
-        if (Variant::has_utility_function(original_name))
+        if (VariantExt::has_utility_function(original_name))
         {
             //TODO check static bindings at first, and dynamic bindings as a fallback
 
             // dynamic binding:
-            static_assert(sizeof(Variant::ValidatedUtilityFunction) == sizeof(void*));
+            static_assert(sizeof(ValidatedUtilityFunction) == sizeof(void*));
             const int32_t utility_func_index = (int32_t) env->get_variant_info_collection().utility_funcs.size();
             env->get_variant_info_collection().utility_funcs.append({});
             internal::FUtilityMethodInfo& method_info = env->get_variant_info_collection().utility_funcs.write[utility_func_index];
 
-            const int argument_count = Variant::get_utility_function_argument_count(original_name);
+            const int argument_count = VariantExt::get_utility_function_argument_count(original_name);
             method_info.argument_types.resize(argument_count);
             for (int index = 0, num = argument_count; index < num; ++index)
             {
-                method_info.argument_types.write[index] = Variant::get_utility_function_argument_type(original_name, index);
+                method_info.argument_types.write[index] = VariantExt::get_utility_function_argument_type(original_name, index);
             }
             //NOTE currently, utility functions have no default argument.
             // method_info.default_arguments = ...
-            method_info.return_type = Variant::get_utility_function_return_type(original_name);
-            method_info.is_vararg = Variant::is_utility_function_vararg(original_name);
+            method_info.return_type = VariantExt::get_utility_function_return_type(original_name);
+            method_info.is_vararg = VariantExt::is_utility_function_vararg(original_name);
             method_info.set_debug_name(internal::NamingUtil::get_member_name(original_name));
-            method_info.utility_func = Variant::get_validated_utility_function(original_name);
+            method_info.utility_func = VariantExt::get_validated_utility_function(original_name);
             JSB_LOG(VeryVerbose, "expose godot utility function %s (%d)", original_name, utility_func_index);
             jsb_check(method_info.utility_func);
 
@@ -103,12 +105,19 @@ namespace jsb
             }
 
             // dynamic binding: godot class types
-            if (const NativeClassInfoPtr class_info = env->expose_godot_object_class(ClassDB::classes.getptr(original_name)))
+            if (ClassDBSingleton::get_singleton()->class_exists(original_name))
             {
-                jsb_check(class_info->name == p_type_name);
-                jsb_check(!class_info->clazz.IsEmpty());
-                info.GetReturnValue().Set(class_info->clazz.Get(isolate));
-                return;
+                // TODO: 不要直接使用 ClassDB::ClassInfo！
+                ClassDB::ClassInfo temp_info;
+                temp_info.name = original_name;
+                temp_info.parent_name = ClassDBSingleton::get_singleton()->get_parent_class(original_name);
+                if (const NativeClassInfoPtr class_info = env->expose_godot_object_class(&temp_info))
+                {
+                    jsb_check(class_info->name == p_type_name);
+                    jsb_check(!class_info->clazz.IsEmpty());
+                    info.GetReturnValue().Set(class_info->clazz.Get(isolate));
+                    return;
+                }
             }
         }
 
@@ -135,7 +144,7 @@ namespace jsb
             return;
         }
 
-        impl::Helper::throw_error(isolate, jsb_format("godot class not found '%s'", original_name));
+        jsb_throw(isolate, jsb_format("godot class not found '%s'", original_name));
     }
 
     v8::Local<v8::Object> GodotModuleLoader::_get_loader_proxy(Environment* p_env)

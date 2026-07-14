@@ -6,6 +6,8 @@
 #include "jsb_environment.h"
 #include "jsb_type_convert.h"
 
+#include <mutex>
+
 #if JSB_WITH_WEB
 #include <pthread.h>
 #endif
@@ -15,7 +17,8 @@ namespace jsb
     enum class FinalizationType : uint8_t;
 
     typedef internal::Index32 WorkerID;
-    typedef Mutex WorkerLock;
+
+    typedef std::mutex WorkerLock;
     class Environment;
     class WorkerImpl;
     typedef std::shared_ptr<WorkerImpl> WorkerImplPtr;
@@ -59,8 +62,8 @@ namespace jsb
         WorkerID id_ = {};
 
         static WorkerLock lock_;
-        static internal::SArray<WorkerImplPtr, WorkerID> worker_list_;
-        static HashMap<Thread::ID, WorkerID> workers_;
+        static internal::SArray<WorkerImplPtr, WorkerID> &get_worker_list();
+        static HashMap<ThreadID, WorkerID> &get_workers();
 
     public:
         enum class WebNativeTransferError : int32_t

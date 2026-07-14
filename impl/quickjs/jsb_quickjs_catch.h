@@ -1,7 +1,7 @@
 #ifndef GODOTJS_QUICKJS_CATCH_H
 #define GODOTJS_QUICKJS_CATCH_H
 
-#include "core/string/ustring.h"
+#include <godot_cpp/variant/string.hpp>
 
 namespace v8
 {
@@ -21,7 +21,7 @@ namespace jsb::impl
         v8::Isolate* get_isolate() const { return isolate_; }
 
         bool has_caught() const;
-        void get_message(String* r_message, String* r_stacktrace = nullptr) const;
+        void get_message(godot::String* r_message, godot::String* r_stacktrace = nullptr) const;
     };
 }
 #endif

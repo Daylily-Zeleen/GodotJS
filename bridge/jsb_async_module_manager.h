@@ -20,7 +20,7 @@ namespace jsb
 #endif
         };
 
-        Mutex modules_mutex_;
+        mutable std::mutex modules_mutex_;
 
         /**
          * > THIS IS NOT IMPLEMENTED YET:
@@ -37,7 +37,7 @@ namespace jsb
         internal::SArray<ModuleInfo, AsyncModuleToken> modules_;
 
     public:
-        AsyncModuleManager() = default;
+        AsyncModuleManager();
         ~AsyncModuleManager();
         
         /** [threaded] */

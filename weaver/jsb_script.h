@@ -4,14 +4,27 @@
 #include "../compat/jsb_compat.h"
 #include "../bridge/jsb_bridge.h"
 
-class GodotJSScript : public Script
+#include <godot_cpp/classes/script_extension.hpp>
+#include <godot_cpp/classes/script_language.hpp>
+#include <godot_cpp/templates/hash_set.hpp>
+#include <godot_cpp/templates/self_list.hpp>
+#include <godot_cpp/templates/rb_set.hpp>
+#include <godot_cpp/templates/hash_map.hpp>
+#include <godot_cpp/templates/list.hpp>
+#include <godot_cpp/templates/vector.hpp>
+
+#include "jsb_script_language.h"
+
+class ScriptInstance;
+class PlaceholderScriptInstance;
+
+class GodotJSScript : public ScriptExtension
 {
+    GDCLASS(GodotJSScript, ScriptExtension)
+
     friend class GodotJSScriptInstance;
     friend class GodotJSScriptInstanceBase;
     friend class GodotJSShadowScriptInstance;
-    typedef Script super;
-
-    GDCLASS(GodotJSScript, Script)
 
 private:
     bool loaded_ = false;
@@ -20,8 +33,6 @@ private:
     String source_;
 
     Ref<GodotJSScript> base;
-
-    HashSet<PlaceHolderScriptInstance*> placeholders;
 
     // WTF??
     HashMap<StringName, Variant> member_default_values_cache;
@@ -43,7 +54,8 @@ private:
     jsb::StatelessScriptClassInfo script_class_info_;
 
 #ifdef DEBUG_ENABLED
-	HashMap<ObjectID, List<Pair<StringName, Variant>>> pending_reload_state_;
+	HashMap<ObjectInstanceID, ScriptInstancePropertyState> pending_reload_state_;
+    LocalVector<PlaceholderScriptInstance*, int32_t> placeholders; // TODO: 是否要改成 HashMap 加快查找？
 #endif
 
     friend class GodotJSScriptLanguage;
@@ -51,18 +63,20 @@ private:
 private:
     void load_module_immediately();
     jsb_force_inline void ensure_module_loaded() const { if (jsb_unlikely(!loaded_)) const_cast<GodotJSScript*>(this)->load_module_immediately(); }
-    jsb_force_inline bool _is_valid() const { return jsb::internal::VariantUtil::is_valid_name(script_class_info_.module_id); }
+    jsb_force_inline bool is_valid_internal() const { return jsb::internal::VariantUtil::is_valid_name(script_class_info_.module_id); }
 
-    Variant _new(const Variant** p_args, int p_argcount, Callable::CallError &r_error);
+    Variant _new(const Variant** p_args, GDExtensionInt p_argcount, GDExtensionCallError &r_error);
 
-    bool _update_exports(PlaceHolderScriptInstance *p_instance_to_update);
-    void _update_exports_values(List<PropertyInfo>& r_props, HashMap<StringName, Variant>& r_values);
+#ifdef DEBUG_ENABLED
+    bool _update_exports_internal(class PlaceholderScriptInstance* p_placeholder_instance_to_update);
+    void _update_exports_values(TypedArray<Dictionary>& r_props, Dictionary& r_values);
+#endif // DEBUG_ENABLED
 
 public:
     GodotJSScript();
     virtual ~GodotJSScript() override;
 
-	bool is_root_script() const { return get_base_script().is_null(); }
+	bool is_root_script() const { return _get_base_script().is_null(); }
 
     StringName get_module_id() const { return script_class_info_.module_id; };
 
@@ -80,94 +94,84 @@ public:
     ScriptInstance* instance_construct(Object* p_this, bool p_is_temp_allowed, const Variant **p_args = nullptr, int p_argcount = 0);
 
 #pragma region Script Implementation
-    virtual bool can_instantiate() const override;
+    virtual bool _can_instantiate() const override;
 
-    virtual Ref<Script> get_base_script() const override; // for script inheritance
-    virtual StringName get_global_name() const override;
-    virtual bool inherits_script(const Ref<Script>& p_script) const override;
+    virtual Ref<Script> _get_base_script() const override; // for script inheritance
+    virtual StringName _get_global_name() const override;
+    virtual bool _inherits_script(const Ref<Script>& p_script) const override;
 
-    virtual StringName get_instance_base_type() const override; // this may not work in all scripts, will return empty if so
-    virtual ScriptInstance* instance_create(Object* p_this) override { return instance_construct(p_this, true); }
+    virtual StringName _get_instance_base_type() const override; // this may not work in all scripts, will return empty if so
 
-    virtual PlaceHolderScriptInstance* placeholder_instance_create(Object* p_this) override;
-    virtual bool instance_has(const Object* p_this) const;
+    ScriptInstance* instance_create(Object* p_for_object) { return instance_construct(p_for_object, true); }
+    virtual GDExtensionScriptInstancePtr _instance_create(Object* p_for_object) const override;
+    virtual GDExtensionScriptInstancePtr _placeholder_instance_create(Object* p_for_object) const override;
+#ifdef TOOLS_ENABLED
+    virtual void _placeholder_erased(GDExtensionScriptInstancePtr p_placeholder) override;
+#endif // TOOLS_ENABLED
 
-    virtual bool has_source_code() const override { return !source_.is_empty(); }
-    virtual String get_source_code() const override { return source_; }
-    virtual void set_source_code(const String& p_code) override;
-    virtual void set_path(const String &p_path, bool p_take_over) override;
-    virtual Error reload(bool p_keep_state = false) override;
+    virtual bool _has_source_code() const override { return !source_.is_empty(); }
+    virtual String _get_source_code() const override { return source_; }
+    virtual void _set_source_code(const String& p_code) override;
+
+    virtual Error _reload(bool p_keep_state) override;
 
 #ifdef TOOLS_ENABLED
-#if GODOT_4_4_OR_NEWER
-	virtual StringName get_doc_class_name() const override;
-#endif
-    virtual Vector<DocData::ClassDoc> get_documentation() const override;
-    virtual String get_class_icon_path() const override;
-    virtual PropertyInfo get_class_category() const override;
+    PropertyInfo get_class_category() const;
+    virtual StringName _get_doc_class_name() const override;
+    virtual TypedArray<Dictionary> _get_documentation() const override;
+    virtual String _get_class_icon_path() const override;
 #endif // TOOLS_ENABLED
 
     // TODO: In the next compat breakage rename to `*_script_*` to disambiguate from `Object::has_method()`.
-    virtual bool has_method(const StringName& p_method) const override;
-    virtual bool has_static_method(const StringName& p_method) const override;
+    virtual bool _has_method(const StringName& p_method) const override;
+    virtual bool _has_static_method(const StringName& p_method) const override;
 
-    virtual MethodInfo get_method_info(const StringName& p_method) const override;
+    virtual Dictionary _get_method_info(const StringName& p_method) const override;
 
     // we expect Godot calling this after loaded_?
     // is_valid() will ensure the module is loaded.
     // [INTERNAL] if it's not expected, call `_is_valid` instead.
-    virtual bool is_valid() const override { ensure_module_loaded(); return _is_valid(); }
-    virtual bool is_tool() const override { return is_valid() && script_class_info_.is_tool(); }
-    virtual bool is_abstract() const override { return is_valid() && script_class_info_.is_abstract(); }
+    virtual bool _is_valid() const override { ensure_module_loaded(); return is_valid_internal(); }
+    virtual bool _is_tool() const override { return _is_valid() && script_class_info_.is_tool(); }
+    virtual bool _is_abstract() const override { return _is_valid() && script_class_info_.is_abstract(); }
 
-    virtual ScriptLanguage* get_language() const override;
+    virtual ScriptLanguage* _get_language() const override;
 
-    virtual bool has_script_signal(const StringName& p_signal) const override;
-    virtual void get_script_signal_list(List<MethodInfo>* r_signals) const override;
+    virtual bool _has_script_signal(const StringName& p_signal) const override;
+    virtual TypedArray<Dictionary> _get_script_signal_list() const override;
 
-    virtual bool is_placeholder_fallback_enabled() const override { return loaded_ && !is_valid(); }
-    virtual bool get_property_default_value(const StringName& p_property, Variant& r_value) const override;
+    virtual bool _is_placeholder_fallback_enabled() const override { return loaded_ && !_is_valid(); }
+    virtual Variant _get_property_default_value(const StringName& p_property) const override;
 
-    virtual void update_exports() override;
+    virtual void _update_exports() override;
 
     //editor tool
-    virtual void get_script_method_list(List<MethodInfo>* p_list) const override;
-    virtual void get_script_property_list(List<PropertyInfo>* p_list) const override;
+    virtual TypedArray<Dictionary> _get_script_method_list() const override;
+    virtual TypedArray<Dictionary> _get_script_property_list() const override;
 
-    virtual int get_member_line(const StringName& p_member) const override { return -1; }
+    virtual int32_t _get_member_line(const StringName& p_member) const override { return -1; } // TODO
 
-    virtual void get_constants(HashMap<StringName, Variant>* p_constants) override
+    virtual Dictionary _get_constants() const override  // TODO
     {
+        return Dictionary();
     }
-    virtual void get_members(HashSet<StringName>* p_constants) override
+    virtual TypedArray<StringName> _get_members() const override  // TODO
     {
+        return TypedArray<StringName>();
     }
 
-#if GODOT_4_5_OR_NEWER
-    virtual const Variant get_rpc_config() const override;
-#elif GODOT_4_4_OR_NEWER
-    virtual Variant get_rpc_config() const override;
-#else
-    virtual const Variant get_rpc_config() const override;
-#endif
+    virtual Variant _get_rpc_config() const override;
+
+    virtual bool _editor_can_reload_from_file() override { return true; }
+
+#ifndef DISABLE_DEPRECATED
+    virtual bool _instance_has(Object *p_object) const override;
+#endif // !DISABLE_DEPRECATED
 
 #pragma endregion // Script Interface Implementation
 
 protected:
     static void _bind_methods();
-
-#pragma region Script Implementation
-#ifdef TOOLS_ENABLED
-    virtual void _placeholder_erased(PlaceHolderScriptInstance* p_placeholder) override;
-#endif
-
-    //TODO -- begin -- auto reload outside of internal ScriptEditor by intercepting proper callbacks?
-    virtual bool editor_can_reload_from_file() override { return true; }
-    virtual void reload_from_file() override;
-    //TODO -- end   -- auto reload outside of internal ScriptEditor by intercepting proper callbacks?
-
-#pragma endregion
-
 };
 
 #endif

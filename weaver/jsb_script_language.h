@@ -4,9 +4,9 @@
 #include "../bridge/jsb_bridge.h"
 #include "../compat/jsb_compat.h"
 
-#if defined(TOOLS_ENABLED) && GODOT_4_7_OR_NEWER
-#include "core/object/editor_language.h"
-#endif
+#include <godot_cpp/classes/script_language_extension.hpp>
+#include <godot_cpp/classes/script.hpp>
+#include <godot_cpp/templates/self_list.hpp>
 
 
 class GodotJSScript;
@@ -54,8 +54,12 @@ namespace jsb
     };
 }
 
-class GodotJSScriptLanguage : public ScriptLanguage
+using ScriptInstancePropertyState = List<Pair<StringName, Variant>>; // TODO: 或者 LocalVector<Pair<StringName, Variant>>，看注重时间还是空间
+
+class GodotJSScriptLanguage : public ScriptLanguageExtension
 {
+    // GDCLASS(GodotJSScriptLanguage, ScriptLanguageExtension) // TODO: 待确认，应该不需要注册于暴露
+
 private:
     friend class GodotJSScript;
     friend class GodotJSScriptInstance;
@@ -65,7 +69,7 @@ private:
 
     struct ShadowEnvironment
     {
-        Thread::ID thread_id = Thread::UNASSIGNED_ID;
+        jsb::compat::ThreadID thread_id = jsb::compat::UNASSIGNED_THREAD_ID;
         std::shared_ptr<jsb::Environment> holder;
         int rc = 0;
     };
@@ -96,14 +100,14 @@ private:
 
     static GodotJSScriptLanguage* singleton_;
 
-    Mutex mutex_;
+    mutable std::mutex mutex_;
     SelfList<GodotJSScript>::List script_list_;
 
     bool once_inited_ = false;
     uint64_t last_ticks_ = 0;
     std::shared_ptr<jsb::Environment> environment_;
 
-    Mutex shadow_mutex_;
+    mutable std::mutex shadow_mutex_;
     std::vector<ShadowEnvironment> shadow_environments_;
 
 #if JSB_DEBUG
@@ -154,122 +158,81 @@ public:
     GodotJSScriptLanguage();
     virtual ~GodotJSScriptLanguage() override;
 
-    virtual void init() override;
-    virtual void finish() override;
-    virtual void frame() override;
+    virtual void _init() override;
+    virtual void _finish() override;
+    virtual void _frame() override;
 
-    virtual void thread_enter() override;
-    virtual void thread_exit() override;
+    virtual void _thread_enter() override;
+    virtual void _thread_exit() override;
 
-    virtual bool is_control_flow_keyword(ConstStringRefCompat p_keyword) const override;
-    virtual Vector<ScriptTemplate> get_built_in_templates(ConstStringNameRefCompat p_object) override;
+    virtual bool _is_control_flow_keyword(const String& p_keyword) const override;
+    virtual TypedArray<Dictionary> _get_built_in_templates(const StringName& p_object) const override;
 
 	/* EDITOR FUNCTIONS */
-#if defined(TOOLS_ENABLED) && GODOT_4_7_OR_NEWER
-    EditorLanguage editor_language;
-	// Must not return `nullptr`. `EditorLanguage` can be used as default implementation for languages without editor support.
-	virtual EditorLanguage *get_editor_language() override {return &editor_language;}
-#endif // defined(TOOLS_ENABLED) && GODOT_4_7_OR_NEWER
+    virtual PackedStringArray _get_reserved_words() const override;
 
-#if GODOT_4_5_OR_NEWER
-    virtual Vector<String> get_reserved_words() const override;
+    virtual PackedStringArray _get_doc_comment_delimiters() const override;
+    virtual PackedStringArray _get_comment_delimiters() const override;
+    virtual PackedStringArray _get_string_delimiters() const override;
 
-    virtual Vector<String> get_doc_comment_delimiters() const override;
-    virtual Vector<String> get_comment_delimiters() const override;
-    virtual Vector<String> get_string_delimiters() const override;
-#else
-    virtual Vector<String> get_reserved_words() const;
+    virtual Dictionary _validate(const String& p_script, const String& p_path, bool p_validate_functions, bool p_validate_errors, bool p_validate_warnings, bool p_validate_safe_lines) const override;
+    virtual Ref<Script> _make_template(const String& p_template, const String& p_class_name, const String& p_base_class_name) const override;
+    virtual void _reload_all_scripts() override;
+    virtual PackedStringArray _get_recognized_extensions() const override;
 
-    virtual void get_reserved_words(List<String>* p_words) const override;
-    virtual void get_doc_comment_delimiters(List<String>* p_delimiters) const override;
-    virtual void get_comment_delimiters(List<String>* p_delimiters) const override;
-    virtual void get_string_delimiters(List<String>* p_delimiters) const override;
-#endif
-
-#if !GODOT_4_7_OR_NEWER
-    virtual Script* create_script() const override;
-#endif
-    virtual bool validate(const String& p_script, const String& p_path = "", List<String>* r_functions = nullptr, List<ScriptError>* r_errors = nullptr, List<Warning>* r_warnings = nullptr, HashSet<int>* r_safe_lines = nullptr) const override;
-    virtual Ref<Script> make_template(const String& p_template, const String& p_class_name, const String& p_base_class_name) const override;
-    virtual void reload_all_scripts() override;
-    virtual void get_recognized_extensions(List<String>* p_extensions) const override;
-
-    virtual bool supports_documentation() const override { return true; }
-
-#if GODOT_4_3_OR_NEWER
-    virtual void reload_scripts(const Array& p_scripts, bool p_soft_reload) override;
-    virtual void profiling_set_save_native_calls(bool p_enable) override;
-#endif
+    virtual bool _supports_documentation() const override { return true; }
+    virtual void _reload_scripts(const Array& p_scripts, bool p_soft_reload) override;
+    virtual void _profiling_set_save_native_calls(bool p_enable) override;
 
 #pragma region DEFAULTLY AND PARTIALLY SUPPORTED
-    virtual String get_name() const override;
-    virtual String get_type() const override;
+    virtual String _get_name() const override;
+    virtual String _get_type() const override;
 
 #if JSB_USE_TYPESCRIPT
-    virtual String get_extension() const override { return JSB_TYPESCRIPT_EXT; }
+    virtual String _get_extension() const override { return JSB_TYPESCRIPT_EXT; }
 #else
-    virtual String get_extension() const override { return JSB_JAVASCRIPT_EXT; }
+    virtual String _get_extension() const override { return JSB_JAVASCRIPT_EXT; }
 #endif
 
-    virtual bool is_using_templates() override { return true; }
-#if !GODOT_4_6_OR_NEWER
+    virtual bool _is_using_templates() override { return true; }
 #ifndef DISABLE_DEPRECATED
-    // virtual bool has_named_classes() const override { return false; }
+    virtual bool _has_named_classes() const override { return false; }
 #endif // DISABLE_DEPRECATED
-#endif // !GODOT_4_6_OR_NEWER
-    virtual bool supports_builtin_mode() const override { return false; }
+    virtual bool _supports_builtin_mode() const override { return false; }
 
-    virtual int find_function(const String& p_function, const String& p_code) const override { return -1; }
-    virtual String make_function(const String& p_class, const String& p_name, const PackedStringArray& p_args) const override { return ""; }
+    virtual int32_t _find_function(const String& p_function, const String& p_code) const override { return -1; } // TODO
+    virtual String _make_function(const String& p_class_name, const String& p_function_name, const PackedStringArray& p_function_args) const override { return ""; } // TODO
 
-    virtual void auto_indent_code(String& p_code, int p_from_line, int p_to_line) const override
-    {
-    }
-    virtual void add_global_constant(const StringName& p_variable, const Variant& p_value) override
-    {
-    }
+    virtual String _auto_indent_code(const String& p_code, int32_t p_from_line, int32_t p_to_line) const override { return p_code; } // TODO
+    virtual void _add_global_constant(const StringName& p_name, const Variant& p_value) override {} // TODO
+    virtual void _add_named_global_constant(const StringName& p_name, const Variant& p_value) override {} // TODO
+    virtual void _remove_named_global_constant(const StringName& p_name) override {} // TODO
 
-    virtual String debug_get_error() const override { return ""; }
-    virtual int debug_get_stack_level_count() const override { return 1; }
-    virtual int debug_get_stack_level_line(int p_level) const override { return 1; }
-    virtual String debug_get_stack_level_function(int p_level) const override { return ""; }
-    virtual String debug_get_stack_level_source(int p_level) const override { return ""; }
-    virtual void debug_get_stack_level_locals(int p_level, List<String>* p_locals, List<Variant>* p_values, int p_max_subitems, int p_max_depth) override
-    {
-    }
-    virtual void debug_get_stack_level_members(int p_level, List<String>* p_members, List<Variant>* p_values, int p_max_subitems, int p_max_depth) override
-    {
-    }
-    virtual void debug_get_globals(List<String>* p_locals, List<Variant>* p_values, int p_max_subitems, int p_max_depth) override
-    {
-    }
-    virtual String debug_parse_stack_level_expression(int p_level, const String& p_expression, int p_max_subitems, int p_max_depth) override { return ""; }
-    virtual Vector<StackInfo> debug_get_current_stack_info() override { return {}; }
-    virtual void reload_tool_script(const Ref<Script>& p_script, bool p_soft_reload) override;
+    virtual String _debug_get_error() const override { return ""; } // TODO
+    virtual int32_t _debug_get_stack_level_count() const override { return 1; } // TODO
+    virtual int32_t _debug_get_stack_level_line(int32_t p_level) const override { return 1; } // TODO
+    virtual String _debug_get_stack_level_function(int32_t p_level) const override { return ""; } // TODO
+    virtual String _debug_get_stack_level_source(int32_t p_level) const override { return ""; } // TODO
+    virtual Dictionary _debug_get_stack_level_locals(int32_t p_level, int32_t p_max_subitems, int32_t p_max_depth) override { return Dictionary(); } // TODO
+    virtual Dictionary _debug_get_stack_level_members(int32_t p_level, int32_t p_max_subitems, int32_t p_max_depth) override { return Dictionary(); } // TODO
+    virtual void* _debug_get_stack_level_instance(int32_t p_level) override { return nullptr; } // TODO
+    virtual Dictionary _debug_get_globals(int32_t p_max_subitems, int32_t p_max_depth) override { return Dictionary(); } // TODO 
+    virtual String _debug_parse_stack_level_expression(int32_t p_level, const String& p_expression, int32_t p_max_subitems, int32_t p_max_depth) override { return ""; } // TODO
+    virtual TypedArray<Dictionary> _debug_get_current_stack_info() override { return {}; } // TODO: Vector<StackInfo>
+    virtual void _reload_tool_script(const Ref<Script>& p_script, bool p_soft_reload) override;
 
-    virtual void get_public_functions(List<MethodInfo>* p_functions) const override
-    {
-    }
-    virtual void get_public_constants(List<Pair<String, Variant>>* p_constants) const override
-    {
-    }
-    virtual void get_public_annotations(List<MethodInfo>* p_annotations) const override
-    {
-    }
+    virtual TypedArray<Dictionary> _get_public_functions() const override { return {}; } // TODO: Vector<StackInfo>
+    virtual Dictionary _get_public_constants() const override { return Dictionary(); } // TODO: Vector<StackInfo>
+    virtual TypedArray<Dictionary> _get_public_annotations() const override { return {}; } // TODO: Vector<StackInfo>
 
-    virtual void profiling_start() override;
-    virtual void profiling_stop() override;
+    virtual void _profiling_start() override;
+    virtual void _profiling_stop() override;
 
-    virtual int profiling_get_accumulated_data(ProfilingInfo* p_info_arr, int p_info_max) override;
-    virtual int profiling_get_frame_data(ProfilingInfo* p_info_arr, int p_info_max) override;
+    virtual int32_t _profiling_get_accumulated_data(ScriptLanguageExtensionProfilingInfo* p_info_array, int32_t p_info_max) override;
+    virtual int32_t _profiling_get_frame_data(ScriptLanguageExtensionProfilingInfo* p_info_array, int32_t p_info_max) override;
 
-    virtual bool handles_global_class_type(const String& p_type) const override;
-
-#if GODOT_4_4_OR_NEWER
-    virtual String get_global_class_name(const String &p_path, String *r_base_type = nullptr, String *r_icon_path = nullptr, bool *r_is_abstract = nullptr, bool *r_is_tool = nullptr) const override;
-#else
-    virtual String get_global_class_name(const String& p_path, String* r_base_type = nullptr, String* r_icon_path = nullptr) const override;
-#endif
+    virtual bool _handles_global_class_type(const String& p_type) const override;
+    virtual Dictionary _get_global_class_name(const String& p_path) const override;
 
 #pragma endregion
 

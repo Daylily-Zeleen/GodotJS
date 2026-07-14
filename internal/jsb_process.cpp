@@ -35,7 +35,7 @@ namespace jsb::internal
         String proc_name;
         HANDLE rd_pipe = nullptr;
         Vector<char> rd_line;
-        Thread thread;
+        Ref<Thread> thread;
         volatile bool is_closing = false;
         // int bytes_in_buffer = 0;
 
@@ -76,11 +76,7 @@ namespace jsb::internal
                 }
             }
 
-#if GODOT_4_5_OR_NEWER || JSB_GDEXTENSION
             const String output = buffer.is_empty() ? String::utf8(rd_line.ptr(), rd_line.size()) : String(buffer.ptr());
-#else
-            const String output = buffer.is_empty() ? String::utf8(rd_line.ptr(), rd_line.size()) : String(buffer.ptr(), num);
-#endif
             if (!output.is_empty())
             {
                 JSB_PROCESS_LOG(Log, "[%s] %s", proc_name, output);
@@ -130,17 +126,17 @@ namespace jsb::internal
             rd_pipe = pipe[0];
             proc_name = p_name;
             {
-                //TODO use async io instead of threading
-                Thread::Settings settings;
-                settings.priority = Thread::PRIORITY_LOW;
-                thread.start(&ProcessImpl::_thread_run, this, settings);
+                //TODO use async io instead of threading;
+                thread.instantiate();
+                thread->start(callable_mp_static(&ProcessImpl::_thread_run).bind(reinterpret_cast<uintptr_t>(this)),Thread::PRIORITY_LOW);
             }
             return OK;
         }
 
-        static void _thread_run(void* p_userdata)
+        // static void _thread_run(void* p_userdata)
+        static void _thread_run(uintptr_t p_userdata)
         {
-            ProcessImpl* impl = (ProcessImpl*) p_userdata;
+            ProcessImpl* impl = reinterpret_cast<ProcessImpl*>(p_userdata);
             int start_state = 0;
             char buffer[4096];
 
@@ -214,7 +210,7 @@ namespace jsb::internal
             CloseHandle(pi.pi.hThread);
             CloseHandle(rd_pipe);
             rd_pipe = nullptr;
-            thread.wait_to_finish();
+            thread->wait_to_finish();
             JSB_PROCESS_LOG(Log, "[%s] terminated", proc_name);
         }
     };
@@ -225,7 +221,7 @@ namespace jsb::internal
         String proc_name;
         int pipefd[2] = { 0, 0 };
         pid_t child_id_ = -1;
-        Thread thread;
+        Ref<Thread> thread;
         bool is_closing = false;
         Vector<char> rd_line;
 
@@ -274,9 +270,8 @@ namespace jsb::internal
 
             close(pipefd[1]);
             {
-                Thread::Settings settings;
-                settings.priority = Thread::PRIORITY_LOW;
-                thread.start(&ProcessImpl::_thread_run, this, settings);
+                thread.instantiate();
+                thread->start(callable_mp_static(&ProcessImpl::_thread_run).bind(reinterpret_cast<uintptr_t>(this)),Thread::PRIORITY_LOW);
             }
             return OK;
         }
@@ -337,11 +332,7 @@ namespace jsb::internal
         {
             if (rd_line.is_empty()) return;
             String line;
-#if GODOT_4_5_OR_NEWER
             if (line.append_utf8(rd_line.ptr()) == OK) JSB_PROCESS_LOG(Log, "[%s] %s", proc_name, line);
-#else
-            if (line.parse_utf8(rd_line.ptr()) == OK) JSB_PROCESS_LOG(Log, "[%s] %s", proc_name, line);
-#endif
             rd_line.clear();
         }
 
@@ -367,7 +358,7 @@ namespace jsb::internal
                 int st;
                 ::waitpid(child_id_, &st, 0);
             }
-            thread.wait_to_finish();
+            thread->wait_to_finish();
             JSB_PROCESS_LOG(Log, "[%s] terminated", proc_name);
         }
     };

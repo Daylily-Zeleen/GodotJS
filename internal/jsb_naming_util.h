@@ -1,8 +1,8 @@
 #ifndef GODOTJS_NAMING_UTIL_H
 #define GODOTJS_NAMING_UTIL_H
 
-#include "core/string/ustring.h"
 #include "jsb_settings.h"
+#include <godot_cpp/variant/string.hpp>
 
 namespace jsb::internal
 {
@@ -82,6 +82,29 @@ namespace jsb::internal
 			}
 
 			return p_original_name;
+		}
+
+		static String validate_ascii_identifier(const String& p_original) {
+			if (p_original.is_empty()) {
+				return "_"; // Empty string is not a valid identifier.
+			}
+
+			String result;
+			if (is_digit(p_original[0])) {
+				result = "_" + p_original;
+			} else {
+				result = p_original;
+			}
+
+			int len = result.length();
+			char32_t *buffer = result.ptrw();
+			for (int i = 0; i < len; i++) {
+				if (!is_ascii_identifier_char(buffer[i])) {
+					buffer[i] = '_';
+				}
+			}
+
+			return result;
 		}
 	};
 }

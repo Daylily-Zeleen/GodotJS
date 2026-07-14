@@ -1,6 +1,7 @@
 #include "jsb_worker.h"
 #include "jsb_buffer.h"
 #include "jsb_environment.h"
+#include <godot_cpp/classes/time.hpp>
 #include "jsb_thread_safe_for_nodes_scope.h"
 #include "jsb_type_convert.h"
 #include "../internal/jsb_sarray.h"
@@ -86,7 +87,7 @@ namespace jsb
         const String path_;
 
         SafeFlag interrupt_requested_ = SafeFlag(false);
-        Thread thread_;
+        Ref<Thread> thread_{memnew(Thread)};
 
         const NativeObjectID handle_;
         std::shared_ptr<Environment> env_;
@@ -119,7 +120,7 @@ namespace jsb
 
         jsb_force_inline void* get_token() const { return token_; }
 
-        jsb_force_inline Thread::ID get_thread_id() const { return thread_.get_id(); }
+        jsb_force_inline ThreadID get_thread_id() const { return OS::get_singleton()->get_thread_caller_id(); }
 
 #if JSB_WITH_WEB
         jsb_force_inline pthread_t get_pthread_id() const { return pthread_id_; }
@@ -354,7 +355,7 @@ namespace jsb
 
         static void _update_environment(const std::shared_ptr<Environment>& p_env, const OS* p_os, uint64_t& p_last_ticks)
         {
-            const uint64_t ticks = p_os->get_ticks_msec();
+            const uint64_t ticks = Time::get_singleton()->get_ticks_msec();
             const uint64_t delta = ticks - p_last_ticks;
             p_env->update(delta);
             p_last_ticks = ticks;
@@ -378,16 +379,16 @@ namespace jsb
             }
         }
 
-        static void _run(void* data)
+        static void _run(uintptr_t data)
         {
-            WorkerImpl* impl = (WorkerImpl*) data;
+            WorkerImpl* impl = reinterpret_cast<WorkerImpl*>(data);
             internal::ThreadUtil::set_name(jsb_format("JSWorker_%d", *impl->id_));
 
 #if JSB_WITH_WEB
             impl->pthread_id_ = pthread_self();
 #else
             const OS* os = OS::get_singleton();
-            uint64_t last_ticks = os->get_ticks_msec();
+            uint64_t last_ticks = Time::get_singleton()->get_ticks_msec();
 #endif
 
             jsb_check(!impl->env_);
@@ -397,7 +398,7 @@ namespace jsb
                 params.initial_class_slots = JSB_WORKER_INITIAL_CLASS_SLOTS;
                 params.initial_object_slots = JSB_WORKER_INITIAL_OBJECT_SLOTS;
                 params.initial_script_slots = JSB_WORKER_INITIAL_SCRIPT_SLOTS;
-                params.thread_id = Thread::get_caller_id();
+                params.thread_id = OS::get_singleton()->get_thread_caller_id();
                 params.type = Environment::Type::Worker;
 
                 const std::shared_ptr<Environment> env = std::make_shared<Environment>(params);
@@ -457,9 +458,9 @@ namespace jsb
                     impl->_on_ready();
 
 #if JSB_WITH_WEB
-                    if (const OS* os = OS::get_singleton())
+                    if (const Time* time = Time::get_singleton())
                     {
-                        impl->web_last_ticks_ = os->get_ticks_msec();
+                        impl->web_last_ticks_ = time->get_ticks_msec();
                     }
                     else
                     {
@@ -489,9 +490,7 @@ namespace jsb
             jsb_check(p_id);
             id_ = p_id;
             JSB_WORKER_LOG(VeryVerbose, "starting Worker %d", p_id);
-            Thread::Settings settings;
-            settings.priority = Thread::PRIORITY_LOW;
-            thread_.start(_run, this,  settings);
+            thread_->start(callable_mp_static(_run).bind(reinterpret_cast<uintptr_t>(this)), Thread::PRIORITY_LOW);
         }
 
         // call from main thread
@@ -500,9 +499,9 @@ namespace jsb
             jsb_check(interrupt_requested_.is_set());
             JSB_WORKER_LOG(VeryVerbose, "wait to finish %d", id_);
             // finished_.wait();
-            if (thread_.is_started())
+            if (thread_->is_started())
             {
-                thread_.wait_to_finish();
+                thread_->wait_to_finish();
             }
             JSB_WORKER_LOG(VeryVerbose, "finished %d", id_);
         }
@@ -803,8 +802,17 @@ namespace jsb
     };
 
     WorkerLock Worker::lock_;
-    internal::SArray<WorkerImplPtr, WorkerID> Worker::worker_list_;
-    HashMap<Thread::ID, WorkerID> Worker::workers_;
+    internal::SArray<WorkerImplPtr, WorkerID> &Worker::get_worker_list()
+    {
+        static internal::SArray<WorkerImplPtr, WorkerID> worker_list;
+        return worker_list;
+    }
+
+    HashMap<ThreadID, WorkerID> &Worker::get_workers()
+    {
+        static HashMap<ThreadID, WorkerID> workers;
+        return workers;
+    }
 
     class JSWorkerModuleLoader : public IModuleLoader
     {
@@ -850,10 +858,10 @@ namespace jsb
     {
         lock_.lock();
         WorkerImplPtr worker = std::make_shared<WorkerImpl>(p_master, p_path, p_handle);
-        const WorkerID id = worker_list_.add(worker);
+        const WorkerID id = get_worker_list().add(worker);
         worker->init(id);
-        jsb_check(worker->get_thread_id() != Thread::UNASSIGNED_ID);
-        workers_.insert(worker->get_thread_id(), id);
+        jsb_check(worker->get_thread_id() != 0);
+        get_workers().insert(worker->get_thread_id(), id);
         lock_.unlock();
 
         return id;
@@ -862,7 +870,7 @@ namespace jsb
     bool Worker::is_valid(WorkerID p_id)
     {
         lock_.lock();
-        const bool valid = worker_list_.is_valid_index(p_id);
+        const bool valid = get_worker_list().is_valid_index(p_id);
         lock_.unlock();
         return valid;
     }
@@ -870,17 +878,17 @@ namespace jsb
 #if JSB_WITH_WEB
     void Worker::on_web_message(jsb::impl::StackPosition p_data_sp, uint32_t p_transfer_id)
     {
-        const Thread::ID thread_id = Thread::get_caller_id();
+        const ThreadID thread_id = OS::get_singleton()->get_thread_caller_id();
         lock_.lock();
-        if (!workers_.has(thread_id))
+        if (!get_workers().has(thread_id))
         {
             lock_.unlock();
             // Transfers are stored in WorkerImpl::transfers_, cleaned up when WorkerImpl is destroyed
             return;
         }
-        const WorkerID worker_id = workers_[thread_id];
+        const WorkerID worker_id = get_workers()[thread_id];
         WorkerImplPtr impl;
-        if (!worker_list_.try_get_value(worker_id, impl))
+        if (!get_worker_list().try_get_value(worker_id, impl))
         {
             lock_.unlock();
             return;
@@ -1027,10 +1035,10 @@ namespace jsb
     bool Worker::web_try_get_worker_by_pthread_id(uintptr_t p_pthread_id, WorkerImplPtr& o_worker_impl)
     {
         lock_.lock();
-        for (WorkerID id = worker_list_.get_first_index(); id; id = worker_list_.get_next_index(id))
+        for (WorkerID id = get_worker_list().get_first_index(); id; id = get_worker_list().get_next_index(id))
         {
             WorkerImplPtr current;
-            if (!worker_list_.try_get_value(id, current))
+            if (!get_worker_list().try_get_value(id, current))
             {
                 continue;
             }
@@ -1048,7 +1056,7 @@ namespace jsb
     {
         lock_.lock();
         WorkerImplPtr impl;
-        if (!worker_list_.try_get_value(p_id, impl) || !impl->on_receive(std::move(p_message)))
+        if (!get_worker_list().try_get_value(p_id, impl) || !impl->on_receive(std::move(p_message)))
         {
             JSB_WORKER_LOG(Error, "can't post message to a dead worker (%d)", p_id);
         }
@@ -1060,7 +1068,7 @@ namespace jsb
     {
         lock_.lock();
         WorkerImplPtr impl;
-        if (!worker_list_.try_get_value(p_id, o_worker_impl))
+        if (!get_worker_list().try_get_value(p_id, o_worker_impl))
         {
             o_worker_impl = nullptr;
         }
@@ -1073,7 +1081,7 @@ namespace jsb
         bool res = false;
         lock_.lock();
         WorkerImplPtr impl;
-        if (worker_list_.try_get_value(p_id, impl))
+        if (get_worker_list().try_get_value(p_id, impl))
         {
             res = true;
             impl->finish();
@@ -1088,17 +1096,17 @@ namespace jsb
         while (has_remaining_workers)
         {
             lock_.lock();
-            const WorkerID id = worker_list_.get_first_index();
+            const WorkerID id = get_worker_list().get_first_index();
             has_remaining_workers = (bool) id;
             if (!has_remaining_workers)
             {
                 lock_.unlock();
                 continue;
             }
-            jsb_check(worker_list_.is_valid_index(id));
-            jsb_check(!worker_list_.is_empty());
+            jsb_check(get_worker_list().is_valid_index(id));
+            jsb_check(!get_worker_list().is_empty());
             WorkerImplPtr impl;
-            worker_list_.try_get_value(id, impl);
+            get_worker_list().try_get_value(id, impl);
             lock_.unlock();
 
             if (impl)
@@ -1107,9 +1115,9 @@ namespace jsb
                 impl->join();
 
                 lock_.lock();
-                if (worker_list_.is_valid_index(id))
+                if (get_worker_list().is_valid_index(id))
                 {
-                    worker_list_.remove_at(id);
+                    get_worker_list().remove_at(id);
                 }
                 lock_.unlock();
             }
@@ -1122,12 +1130,12 @@ namespace jsb
 
     void Worker::on_thread_exit()
     {
-        const Thread::ID p_thread_id = Thread::get_caller_id();
+        const ThreadID p_thread_id = OS::get_singleton()->get_thread_caller_id();
 
         lock_.lock();
-        if (workers_.getptr(p_thread_id))
+        if (get_workers().getptr(p_thread_id))
         {
-            workers_.erase(p_thread_id);
+            get_workers().erase(p_thread_id);
         }
         lock_.unlock();
     }
@@ -1225,7 +1233,7 @@ namespace jsb
         pthread_t pthread_id = 0;
         {
             lock_.lock();
-            if (!worker_list_.try_get_value(worker->id_, impl))
+            if (!get_worker_list().try_get_value(worker->id_, impl))
             {
                 lock_.unlock();
                 jsb_throw(isolate, "postMessage: worker not found");
@@ -1665,7 +1673,7 @@ namespace jsb
                 return false;
             }
 
-            if (!transfer_var.is_array())
+            if (transfer_var.get_type() != Variant::ARRAY)
             {
                 jsb_throw(isolate, "transfer list must be an array");
                 return false;

@@ -1,4 +1,5 @@
 ﻿// Godot do not make operator list public, so we can only do it manually
+// TODO: 通过 extension_api.json 进行代码生成，怎么会有傻逼进行硬编码
 
 JSB_TYPE_BEGIN(Vector2)
     JSB_DEFINE_OVERLOADED_BINARY_BEGIN(ADD)
@@ -347,12 +348,10 @@ JSB_TYPE_BEGIN(PackedVector3Array)
     JSB_DEFINE_COMPARATOR(NOT_EQUAL)
 JSB_TYPE_END()
 
-#if GODOT_4_3_OR_NEWER
 JSB_TYPE_BEGIN(PackedVector4Array)
     JSB_DEFINE_COMPARATOR(EQUAL)
     JSB_DEFINE_COMPARATOR(NOT_EQUAL)
 JSB_TYPE_END()
-#endif
 
 JSB_TYPE_BEGIN(PackedColorArray)
     JSB_DEFINE_COMPARATOR(EQUAL)

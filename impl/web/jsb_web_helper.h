@@ -36,7 +36,7 @@ namespace jsb::impl
             if (size == 0) return {};
 
             PackedByteArray packed;
-            const Error err = packed.resize(size);
+            const Error err = (Error)packed.resize(size);
             jsb_unused(err);
             jsb_check(err == OK);
             jsbi_ReadArrayBufferData(isolate->rt(), array_buffer->stack_pos_, size, packed.ptrw());
@@ -44,7 +44,8 @@ namespace jsb::impl
         }
 
         //TODO copy from HEAP?
-        static v8::Local<v8::ArrayBuffer> to_array_buffer(v8::Isolate* isolate, const Vector<uint8_t>& packed)
+        template<typename PackedTy, typename std::enable_if_t<sizeof(decltype(*PackedTy().ptr())) == sizeof(uint8_t)>* = nullptr> // Vector<uint8_t> or PackedByteArray
+        static v8::Local<v8::ArrayBuffer> to_array_buffer(v8::Isolate* isolate, const PackedTy& packed)
         {
             return v8::Local<v8::ArrayBuffer>(v8::Data(isolate, jsbi_NewArrayBuffer(isolate->rt(), packed.ptr(), packed.size())));
         }

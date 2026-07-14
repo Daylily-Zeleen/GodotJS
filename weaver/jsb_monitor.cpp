@@ -2,9 +2,6 @@
 #include "jsb_script_language.h"
 #include "../internal/jsb_internal.h"
 
-#if GODOT_4_7_OR_NEWER
-#include "core/object/callable_mp.h"
-#endif
 
 #define JSB_NEW_MONITOR(MonitorName) \
     monitor_names_.push_back(JSB_MODULE_NAME_STRING "/" # MonitorName);\
@@ -80,7 +77,7 @@ GodotJSMonitor::~GodotJSMonitor()
 
 void GodotJSMonitor::flush()
 {
-    const uint64_t ticks = Engine::get_singleton()->get_frame_ticks();
+    const uint64_t ticks = Time::get_singleton()->get_ticks_usec();
     if (ticks - last_flush_tick_ < 1000ULL)
     {
         return;

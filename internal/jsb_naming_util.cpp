@@ -1,27 +1,18 @@
 #include "jsb_macros.h"
 #include "jsb_internal.h"
 
-#include <core/object/class_db.h>
 
-#include "core/string/ucaps.h"
-#include "core/templates/hash_map.h"
-#include "core/templates/hash_set.h"
+// GDExtension: provide local character conversion functions
+#include <cctype>
+jsb_force_inline char32_t _find_upper(char32_t p_char) { return (char32_t)std::toupper((int)p_char); }
+jsb_force_inline char32_t _find_lower(char32_t p_char) { return (char32_t)std::tolower((int)p_char); }
 
 // Logic is largely derived from mono/utils/naming_utils.cpp so that our naming conventions remain similar to .NET.
 namespace jsb::internal
 {
-	HashMap<String, String> _create_hashmap_from_vector(Vector<Pair<String, String>> vector)
+	static const HashMap<String, String> &_get_pascal_case_name_overrides()
 	{
-		HashMap<String, String> hashmap = HashMap<String, String>(vector.size());
-		for (const Pair<String, String> &pair : vector)
-		{
-			hashmap.insert(pair.first, pair.second);
-		}
-		return hashmap;
-	}
-
-	// Hardcoded collection of PascalCase name conversions.
-	const HashMap<String, String> pascal_case_name_overrides = _create_hashmap_from_vector({
+		static const HashMap<String, String> table = {
 			{ "BitMap", "Bitmap" },
 			{ "JSONRPC", "JsonRpc" },
 			{ "Object", "GObject" },
@@ -34,10 +25,14 @@ namespace jsb::internal
 			{ "SkeletonModification2DFABRIK", "SkeletonModification2DFabrik" },
 			{ "SkeletonModification3DCCDIK", "SkeletonModification3DCcdik" },
 			{ "SkeletonModification3DFABRIK", "SkeletonModification3DFabrik" },
-	});
+		};
+		return table;
+	}
 
 	// Hardcoded collection of PascalCase part conversions.
-	const HashMap<String, String> pascal_case_part_overrides = _create_hashmap_from_vector({
+	static const HashMap<String, String> &_get_pascal_case_part_overrides()
+	{
+		static const HashMap<String, String> table = {
 			{ "AA", "AA" }, // Anti Aliasing
 			{ "AO", "AO" }, // Ambient Occlusion
 			{ "FILENAME", "FileName" },
@@ -65,28 +60,34 @@ namespace jsb::internal
 			{ "WM", "WM" },
 			{ "XR", "XR" },
 			{ "XRAPI", "XRApi" },
-	});
+		};
+		return table;
+	}
 
-	const HashSet<String> omitted_original_classes_set = {
-		"IPUnix",
-		"ScriptEditorDebugger",
-		"Thread",
-		"Semaphore",
+	static const HashSet<String> &_get_omitted_original_classes()
+	{
+		static const HashSet<String> table = {
+			"IPUnix",
+			"ScriptEditorDebugger",
+			"Thread",
+			"Semaphore",
 
-		// GodotJS related clases
-		"GodotJSEditorPlugin",
-		"GodotJSExportPlugin",
-		"GodotJSREPL",
-		"GodotJSScript",
-		"GodotJSEditorHelper",
-		"GodotJSEditorProgress",
+			// GodotJS related clases
+			"GodotJSEditorPlugin",
+			"GodotJSExportPlugin",
+			"GodotJSREPL",
+			"GodotJSScript",
+			"GodotJSEditorHelper",
+			// "GodotJSEditorProgress",
 
-		// GDScript related classes
-		"GDScript",
-		"GDScriptEditorTranslationParserPlugin",
-		"GDScriptNativeClass",
-		"GDScriptSyntaxHighlighter"
-	};
+			// GDScript related classes
+			"GDScript",
+			"GDScriptEditorTranslationParserPlugin",
+			"GDScriptNativeClass",
+			"GDScriptSyntaxHighlighter",
+		};
+		return table;
+	}
 
 	String _get_pascal_case_part_override(String p_part, bool p_input_is_upper = true)
 	{
@@ -98,9 +99,10 @@ namespace jsb::internal
 			}
 		}
 
-		if (pascal_case_part_overrides.has(p_part))
+		const String* result = _get_pascal_case_part_overrides().getptr(p_part);
+		if (result)
 		{
-			return pascal_case_part_overrides.get(p_part);
+			return *result;
 		}
 
 		return String();
@@ -175,10 +177,11 @@ namespace jsb::internal
 			return p_identifier.to_upper();
 		}
 
-		if (pascal_case_name_overrides.has(p_identifier))
+		const String* result = _get_pascal_case_name_overrides().getptr(p_identifier);
+		if (result)
 		{
 			// Use hardcoded value for the identifier.
-			return pascal_case_name_overrides.get(p_identifier);
+			return *result;
 		}
 
 		Vector<String> parts = _split_pascal_case(p_identifier);
@@ -227,7 +230,7 @@ namespace jsb::internal
 	String NamingUtil::snake_to_pascal_case(const String &p_identifier, bool p_input_is_upper)
 	{
 		String ret;
-		Vector<String> parts = p_identifier.split("_", true);
+		PackedStringArray parts = p_identifier.split("_", true);
 
 		for (int i = 0; i < parts.size(); i++)
 		{
@@ -289,7 +292,7 @@ namespace jsb::internal
 	String NamingUtil::snake_to_camel_case(const String &p_identifier, bool p_input_is_upper)
 	{
 		String ret;
-		Vector<String> parts = p_identifier.split("_", true);
+		PackedStringArray parts = p_identifier.split("_", true);
 
 		for (int i = 0; i < parts.size(); i++)
 		{
@@ -376,21 +379,17 @@ namespace jsb::internal
 		}
 #endif
 
-#if GODOT_4_6_OR_NEWER
-		LocalVector<StringName> all_class_names;
-		ClassDB::get_class_list(all_class_names);
-#else
-		List<StringName> all_class_names;
-		ClassDB::get_class_list(&all_class_names);
-#endif
+		PackedStringArray all_class_names = ClassDB::get_class_list();
 
 		List<StringName> exposed_class_names;
 
-		for (auto it = all_class_names.begin(); it != all_class_names.end(); ++it)
-		{
-			StringName class_name = *it;
+		const HashSet<String> &omitted_original_classes = _get_omitted_original_classes();
 
-			if (omitted_original_classes_set.has(class_name))
+		for (int i = 0; i < all_class_names.size(); i++)
+		{
+			StringName class_name = all_class_names[i];
+
+			if (omitted_original_classes.has(class_name))
 			{
 				JSB_LOG(Verbose, "Omitted class '%s' as it's currently not usable from JavaScript", class_name);
 				continue;
@@ -404,7 +403,7 @@ namespace jsb::internal
 			}
 #endif
 
-			ClassDB::APIType api_type = ClassDB::get_api_type(class_name);
+			ClassDB::APIType api_type = ClassDB::class_get_api_type(class_name);
 
 			if (api_type == ClassDB::API_NONE)
 			{
@@ -412,11 +411,12 @@ namespace jsb::internal
 				continue;
 			}
 
-			if (!ClassDB::is_class_exposed(class_name))
-			{
-				JSB_LOG(Verbose, "Ignoring class '%s' because it's not exposed", class_name);
-				continue;
-			}
+			// GDExtension 获取到的 CLass 只能是 exposed
+			// if (!ClassDB::is_class_exposed(class_name))
+			// {
+			// 	JSB_LOG(Verbose, "Ignoring class '%s' because it's not exposed", class_name);
+			// 	continue;
+			// }
 
 			if (!ClassDB::is_class_enabled(class_name))
 			{
@@ -432,22 +432,25 @@ namespace jsb::internal
 
 	bool NamingUtil::is_original_class_exposed(const String& p_original_name)
 	{
-		if (omitted_original_classes_set.has(p_original_name))
+		const HashSet<String> &omitted_original_classes = _get_omitted_original_classes();
+
+		if (omitted_original_classes.has(p_original_name))
 		{
 			return false;
 		}
 
-		ClassDB::APIType api_type = ClassDB::get_api_type(p_original_name);
+		ClassDB::APIType api_type = ClassDB::class_get_api_type(p_original_name);
 
 		if (api_type == ClassDB::API_NONE)
 		{
 			return false;
 		}
 
-		if (!ClassDB::is_class_exposed(p_original_name))
-		{
-			return false;
-		}
+		// GDExtension 获取到的 CLass 只能是 exposed
+		// if (!ClassDB::is_class_exposed(p_original_name))
+		// {
+		// 	return false;
+		// }
 
 		if (!ClassDB::is_class_enabled(p_original_name))
 		{

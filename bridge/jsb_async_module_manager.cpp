@@ -3,6 +3,10 @@
 
 namespace jsb
 {
+    AsyncModuleManager::AsyncModuleManager()
+    {
+    }
+
     AsyncModuleManager::~AsyncModuleManager()
     {
         if (!!loader_)
@@ -13,7 +17,7 @@ namespace jsb
     
     bool AsyncModuleManager::is_valid(AsyncModuleToken p_token) const
     {
-        MutexLock lock(modules_mutex_);
+        std::lock_guard<std::mutex> lock(modules_mutex_);
         return modules_.is_valid_index(p_token);
     }
 
@@ -63,7 +67,7 @@ namespace jsb
         AsyncModuleManager& manager = env->get_async_module_manager();
         const StringName module_id = env->get_string_name(arg0);
         
-        MutexLock lock(manager.modules_mutex_);
+        std::lock_guard lock(manager.modules_mutex_);
         jsb_check(!manager.tokens_.getptr(module_id));
 #if JSB_SUPPORT_ASYNC_MODULE_LOADER
         if (!!manager.loader_)
@@ -91,7 +95,7 @@ namespace jsb
         v8::Local<v8::Promise::Resolver> resolver;
         StringName module_id;
         {
-            MutexLock lock(modules_mutex_);
+            std::lock_guard lock(modules_mutex_);
             auto pointer = modules_.get_value_scoped(p_token);
             resolver = pointer->resolver.Get(isolate);
             module_id = pointer->module_id;

@@ -3,6 +3,7 @@
 #include "jsb_internal_pch.h"
 
 #if JSB_BENCHMARK
+#   include <godot_cpp/classes/time.hpp>
 #   define JSB_BENCHMARK_SCOPE(RegionName, DetailName) \
     static const char* __String__##RegionName##DetailName = #RegionName "." #DetailName; \
     ::jsb::internal::Benchmark __Benchmark__##RegionName##DetailName(__String__##RegionName##DetailName, __FILE__, __LINE__)
@@ -17,13 +18,13 @@ namespace jsb::internal
     {
         Benchmark(const char* p_name, const char* p_file, int p_line): name_(p_name), file_(p_file), line_(p_line)
         {
-            start_ = OS::get_singleton()->get_ticks_usec();
+            start_ = Time::get_singleton()->get_ticks_usec();
             // OS::get_singleton()->benchmark_begin_measure(name_);
         }
 
         ~Benchmark()
         {
-            const uint64_t total = OS::get_singleton()->get_ticks_usec() - start_;
+            const uint64_t total = Time::get_singleton()->get_ticks_usec() - start_;
             // ignore if finished in a jiffy
             if (total > 20000)
             {

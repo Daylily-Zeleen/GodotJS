@@ -754,6 +754,22 @@ interface CodegenTaskInfo {
     execute: () => void | Promise<void>;
 }
 
+class EditorProgress {
+    constructor(private task_name: string, total: number) {
+        if (godot.ClassDB.class_exists("GodotJSEditorPlugin"))
+            godot.ClassDB.class_call_static("GodotJSEditorPlugin", "add_progress_task", task_name, total);
+    }
+    update(state: string, step: number) {
+        if (godot.ClassDB.class_exists("GodotJSEditorPlugin"))
+            godot.ClassDB.class_call_static("GodotJSEditorPlugin", "update_progress_task", this.task_name, state, step);
+    }
+    finish() {
+        if (godot.ClassDB.class_exists("GodotJSEditorPlugin"))
+            godot.ClassDB.class_call_static("GodotJSEditorPlugin", "finish_progress_task", this.task_name);
+    }
+    [Symbol.dispose]() { this.finish(); }
+}
+
 class CodegenTasks {
     private _name: string;
     private tasks: Array<CodegenTaskInfo> = [];
@@ -767,10 +783,9 @@ class CodegenTasks {
     }
 
     async submit() {
-        const EditorProgress = godot.GodotJSEditorProgress;
-        const progress = new EditorProgress();
         let force_wait = 24;
-        progress.init(`codegen-${this._name}`, this._name, this.tasks.length);
+
+        using progress = new EditorProgress(`codegen-${this._name}`, this.tasks.length);
 
         try {
             for (let i = 0; i < this.tasks.length; ++i) {
@@ -778,19 +793,17 @@ class CodegenTasks {
                 const result = task.execute();
 
                 if (typeof result === "object" && result instanceof Promise) {
-                    progress.set_state_name(task.name);
-                    progress.set_current(i);
+                    progress.update(task.name, i);
                     await result;
                 } else {
                     if (!(i % force_wait)) {
-                        progress.set_state_name(task.name);
-                        progress.set_current(i);
+                        progress.update(task.name, i);
                         await frame_step();
                     }
                 }
             }
 
-            progress.finish();
+            // progress.finish();
 
             const message = `${this._name} generated successfully`;
 
@@ -806,7 +819,7 @@ class CodegenTasks {
                 toast(`${this._name} failed!`);
             }
 
-            progress.finish();
+            // progress.finish();
         }
     }
 }

@@ -7,7 +7,7 @@ namespace jsb::internal
 {
     Ref<PackedScene> ResourceCache::get_packed_scene(const String& p_path, Error& r_error)
     {
-        MutexLock lock(mutex);
+        std::lock_guard<std::mutex> lock(mutex);
 
         const String path = p_path.begins_with("uid://")
             ? ResourceUID::get_singleton()->get_id_path(ResourceUID::get_singleton()->text_to_id(p_path))

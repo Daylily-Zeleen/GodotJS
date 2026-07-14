@@ -28,7 +28,7 @@ namespace jsb
         if constexpr (ActiveSeverity < internal::ELogSeverity::JSB_MIN_LOG_LEVEL) return;
 
         v8::Isolate* isolate = info.GetIsolate();
-        StringBuilder sb;
+        String text; // TODO: 优化文本组织，不要一点点拼
 
         int index;
         if constexpr (ActiveSeverity == internal::ELogSeverity::Assert)
@@ -39,12 +39,12 @@ namespace jsb
                 return;
             }
 
-            sb.append("[JS] Assertion failure:");
+            text = "[JS] Assertion failure:";
             index = 1;
         }
         else
         {
-            sb.append("[JS]");
+            text = "[JS]";
             index = 0;
         }
 
@@ -53,15 +53,14 @@ namespace jsb
         {
             if (String str = BridgeHelper::stringify(isolate, info[index]); str.length() > 0)
             {
-                sb.append(" ");
-                sb.append(str);
+                text += " ";
+                text += str;
             }
         }
 
         if constexpr (ActiveSeverity == internal::ELogSeverity::Assert)
         {
-            const String str = sb.as_string();
-            impl::Helper::throw_error(isolate, str);
+            jsb_throw(isolate, text);
             return;
         }
 
@@ -75,7 +74,6 @@ namespace jsb
 
         if constexpr (ActiveSeverity == internal::ELogSeverity::Warning)
         {
-            const String text = sb.as_string();
             const CharString func_str = source_position.function.utf8();
             const CharString filename_str = source_position.filename.utf8();
             const CharString text_str = text.utf8();
@@ -84,12 +82,11 @@ namespace jsb
             _err_print_error(
                 func_str.get_data(), filename_str.get_data(), source_position.line,
                 text_str.get_data(),
-                false, ERR_HANDLER_WARNING);
+                false, true);
             return;
         }
         if constexpr (ActiveSeverity == internal::ELogSeverity::Error)
         {
-            const String text = sb.as_string();
             const CharString func_str = source_position.function.utf8();
             const CharString filename_str = source_position.filename.utf8();
             const CharString text_str = text.utf8();
@@ -98,17 +95,16 @@ namespace jsb
             _err_print_error(
                 func_str.get_data(), filename_str.get_data(), source_position.line,
                 text_str.get_data(),
-                true, ERR_HANDLER_ERROR);
+                true, false);
             return;
         }
         if constexpr (ActiveSeverity == internal::ELogSeverity::Trace)
         {
             if (!stacktrace.is_empty())
             {
-                sb.append("\n");
-                sb.append(stacktrace);
+                text += ("\n");
+                text += (stacktrace);
             }
-            const String text = sb.as_string();
             internal::IConsoleOutput::internal_write(ActiveSeverity, text);
             print_line(text);
             return;
@@ -116,7 +112,6 @@ namespace jsb
 
         // trivial prints
         {
-            const String text = sb.as_string();
             internal::IConsoleOutput::internal_write(ActiveSeverity, text);
             print_line(text);
         }
@@ -200,7 +195,7 @@ namespace jsb
         Environment* env = Environment::wrap(isolate);
         const v8::Local<v8::String> label = info[0]->IsUndefined() ? jsb_name(env, default) : info[0].As<v8::String>();
         JSTimerTags<uint64_t>& timer_tags = env->get_timer_tags();
-        const auto res = timer_tags.tags.emplace(TStrongRef(isolate, label), OS::get_singleton()->get_ticks_usec());
+        const auto res = timer_tags.tags.emplace(TStrongRef(isolate, label), Time::get_singleton()->get_ticks_usec());
         if (!res.second)
         {
             JSB_LOG(Warning, "timer tag '%s' already exists", impl::Helper::to_string(isolate, label));
@@ -215,7 +210,7 @@ namespace jsb
             jsb_throw(isolate, "bad argument");
             return;
         }
-        const uint64_t now = OS::get_singleton()->get_ticks_usec();
+        const uint64_t now = Time::get_singleton()->get_ticks_usec();
         Environment* env = Environment::wrap(isolate);
         const v8::Local<v8::String> label = info[0]->IsUndefined() ? jsb_name(env, default) : info[0].As<v8::String>();
         JSTimerTags<uint64_t>& timer_tags = env->get_timer_tags();

@@ -13,7 +13,6 @@
 
 #include "jsb_web_isolate.h"
 #include "jsb_web_function_interop.h"
-#include "core/core_bind.h"
 
 #ifdef __EMSCRIPTEN__
 
@@ -148,21 +147,21 @@ JSNATIVE_API EMSCRIPTEN_KEEPALIVE int32_t jsni_worker_get_or_add_native_transfer
 // were removed with the old JS-side walker. Web worker transfer handling now uses
 // JS-side extraction (`extract_message_variants`) plus native transfer queues.
 
-static void _custom_print_verbose(const String& p_str)
+static void _custom_print_verbose(const godot::String& p_str)
 {
     const CharString str8 = p_str.utf8();
     jsbi_log(str8.get_data());
 }
 
-static void _custom_print_line(const String& p_str)
+static void _custom_print_line(const godot::String& p_str)
 {
     const CharString str8 = p_str.utf8();
     jsbi_log(str8.get_data());
 }
 
-static void _custom_print_error(const char *p_function, const char *p_file, int p_line, const String &p_error, bool p_editor_notify, bool p_is_warning)
+static void _custom_print_error(const char *p_function, const char *p_file, int p_line, const godot::String &p_error, bool p_editor_notify, bool p_is_warning)
 {
-    const String str = jsb::internal::format("[%s] %s [at %s %s:%d]",
+    const godot::String str = jsb::internal::format("[%s] %s [at %s %s:%d]",
         p_is_warning ? "WARN" : "ERROR", p_error, p_function,
         p_file, p_line);
     const CharString str8 = str.utf8();

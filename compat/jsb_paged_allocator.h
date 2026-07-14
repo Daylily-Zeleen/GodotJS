@@ -1,12 +1,10 @@
 #ifndef GODOTJS_PAGED_ALLOCATOR_H
 #define GODOTJS_PAGED_ALLOCATOR_H
 
-// this implementation is originally from core/templates/paged_allocator.h
-// we need it here to make it work in gdextension build.
-
-#if JSB_GDEXTENSION
-
-#include "jsb_engine_compat.h"
+#include <godot_cpp/core/defs.hpp>
+#include <godot_cpp/core/memory.hpp>
+#include <godot_cpp/variant/string.hpp>
+#include <godot_cpp/templates/spin_lock.hpp>
 
 #include <type_traits>
 #include <typeinfo>
@@ -22,7 +20,7 @@ class PagedAllocator
     uint32_t page_shift = 0;
     uint32_t page_mask = 0;
     uint32_t page_size = 0;
-    SpinLock spin_lock;
+    mutable godot::SpinLock spin_lock;
 
 public:
     template <typename... Args>
@@ -56,7 +54,12 @@ public:
         {
             spin_lock.unlock();
         }
-        memnew_placement(alloc, T(p_args...));
+
+        if constexpr (sizeof...(Args) == 0) {
+            memnew_placement(alloc, T);
+        }else {
+            memnew_placement(alloc, T(p_args...));
+        }
         return alloc;
     }
 
@@ -138,9 +141,9 @@ public:
         }
         ERR_FAIL_COND(page_pool != nullptr); // Safety check.
         ERR_FAIL_COND(p_page_size == 0);
-        page_size = nearest_power_of_2_templated(p_page_size);
+        page_size = godot::nearest_power_of_2_templated(p_page_size);
         page_mask = page_size - 1;
-        page_shift = get_shift_from_power_of_2(page_size);
+        page_shift = godot::get_shift_from_power_of_2(page_size);
         if constexpr (thread_safe)
         {
             spin_lock.unlock();
@@ -163,10 +166,7 @@ public:
         bool leaked = allocs_available < pages_allocated * page_size;
         if (leaked)
         {
-            if (CoreGlobals::leak_reporting_enabled)
-            {
-                ERR_PRINT(String("Pages in use exist at exit in PagedAllocator: ") + String(typeid(T).name()));
-            }
+            ERR_PRINT(godot::String("Pages in use exist at exit in PagedAllocator: ") + godot::String(typeid(T).name()));
         }
         else
         {
@@ -178,10 +178,5 @@ public:
         }
     }
 };
-#else
-
-#include "core/templates/paged_allocator.h"
-
-#endif // JSB_GDEXTENSION
 
 #endif

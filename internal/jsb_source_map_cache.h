@@ -3,7 +3,7 @@
 
 #include "jsb_internal_pch.h"
 #include "jsb_source_map.h"
-#include "modules/regex/regex.h"
+#include <godot_cpp/classes/reg_ex.hpp>
 
 namespace jsb::internal
 {

@@ -53,7 +53,7 @@ namespace jsb::internal
     {
         String path_;
         String absolute_path_;
-        Vector<uint8_t> buffer_;
+        PackedStringArray buffer_;
 
     public:
         StringSourceReader(const String& p_path, const String& p_absolute_path, const String& p_source);

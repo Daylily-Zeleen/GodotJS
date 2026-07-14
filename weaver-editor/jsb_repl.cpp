@@ -3,9 +3,18 @@
 #include "jsb_editor_plugin.h"
 #include "../compat/jsb_compat.h"
 
-#if GODOT_4_7_OR_NEWER
-#include "core/object/callable_mp.h"
-#endif
+#include <godot_cpp/classes/v_box_container.hpp>
+#include <godot_cpp/classes/h_box_container.hpp>
+#include <godot_cpp/classes/panel.hpp>
+#include <godot_cpp/classes/rich_text_label.hpp>
+#include <godot_cpp/classes/item_list.hpp>
+#include <godot_cpp/classes/input_event_key.hpp>
+#include <godot_cpp/classes/input_event.hpp>
+#include <godot_cpp/classes/line_edit.hpp>
+#include <godot_cpp/classes/label.hpp>
+#include <godot_cpp/classes/texture_rect.hpp>
+#include <godot_cpp/classes/theme.hpp>
+#include <godot_cpp/classes/editor_interface.hpp>
 
 void GodotJSREPL::_bind_methods()
 {
@@ -14,11 +23,7 @@ void GodotJSREPL::_bind_methods()
 
 GodotJSREPL::GodotJSREPL()
 {
-#if GODOT_4_5_OR_NEWER
     sn_backlog_flush_ = StringName("_backlog_flush");
-#else
-    sn_backlog_flush_ = _scs_create("_backlog_flush");
-#endif
     //TODO list all created realm instances in REPL, interact with the currently selected one.
 
     input_submitting_ = false;
@@ -73,6 +78,7 @@ GodotJSREPL::GodotJSREPL()
         tool_bar_box->add_child(start_tsc_button_);
         start_tsc_button_->set_theme_type_variation("FlatButton");
         start_tsc_button_->set_focus_mode(FOCUS_NONE);
+        start_tsc_button_->set_tooltip_text(TTR("Start TSC"));
         start_tsc_button_->connect("pressed", callable_mp(this, &GodotJSREPL::_start_tsc_pressed));
     }
 #endif
@@ -80,7 +86,8 @@ GodotJSREPL::GodotJSREPL()
     Panel* output_container = memnew(Panel);
     output_container->set_h_size_flags(SIZE_EXPAND_FILL);
     output_container->set_v_size_flags(SIZE_EXPAND_FILL);
-    output_container->set_grow_direction_preset(PRESET_FULL_RECT);
+    output_container->set_h_grow_direction(GROW_DIRECTION_BOTH);
+    output_container->set_v_grow_direction(GROW_DIRECTION_BOTH);
     vbox->add_child(output_container);
 
     input_box_ = memnew(LineEdit);
@@ -90,8 +97,8 @@ GodotJSREPL::GodotJSREPL()
     input_box_->set_visible(true);
     input_box_->connect("text_submitted", callable_mp(this, &GodotJSREPL::_input_submitted));
     input_box_->connect("text_changed", callable_mp(this, &GodotJSREPL::_input_changed));
-    input_box_->connect(SceneStringNames::get_singleton()->gui_input, callable_mp(this, &GodotJSREPL::_input_gui_input));
-    input_box_->connect(SceneStringNames::get_singleton()->focus_exited, callable_mp(this, &GodotJSREPL::_input_focus_exit));
+    input_box_->connect("gui_input", callable_mp(this, &GodotJSREPL::_input_gui_input));
+    input_box_->connect("focus_exited", callable_mp(this, &GodotJSREPL::_input_focus_exit));
     vbox->add_child(input_box_);
 
     output_box_ = memnew(RichTextLabel);
@@ -104,7 +111,8 @@ GodotJSREPL::GodotJSREPL()
     output_box_->set_deselect_on_focus_loss_enabled(false);
     output_box_->set_v_size_flags(SIZE_EXPAND_FILL);
     output_box_->set_h_size_flags(SIZE_EXPAND_FILL);
-    output_box_->set_grow_direction_preset(PRESET_FULL_RECT);
+    output_box_->set_h_grow_direction(GROW_DIRECTION_BOTH);
+    output_box_->set_v_grow_direction(GROW_DIRECTION_BOTH);
     output_box_->set_offsets_preset(PRESET_FULL_RECT);
     output_box_->set_anchors_preset(PRESET_FULL_RECT);
     output_container->add_child(output_box_);
@@ -113,7 +121,7 @@ GodotJSREPL::GodotJSREPL()
     candidate_list_->hide();
     candidate_list_->set_focus_mode(FOCUS_NONE);
     candidate_list_->set_mouse_filter(MOUSE_FILTER_IGNORE);
-    candidate_list_->set_disable_visibility_clip(true);
+    // TODO: GDExtension: set_disable_visibility_clip not available in godot-cpp, skip
     candidate_list_->set_size(Size2(600, 160));
     output_container->add_child(candidate_list_);
 
@@ -149,15 +157,19 @@ void GodotJSREPL::_notification(int p_what)
     }
 }
 
+Ref<Texture2D> GodotJSREPL::get_editor_theme_icon(const StringName &p_name) const {
+	return get_theme_icon(p_name, SNAME("EditorIcons"));
+}
+
 void GodotJSREPL::_update_theme()
 {
-    jsb::ButtonCompat::set_icon(gc_button_, get_editor_theme_icon("CollapseTree"));
-    jsb::ButtonCompat::set_icon(clear_button_, get_editor_theme_icon("Clear"));
+    gc_button_->set_button_icon(get_editor_theme_icon("CollapseTree"));
+    clear_button_->set_button_icon(get_editor_theme_icon("Clear"));
     if (generate_types_button_)
     {
-        jsb::ButtonCompat::set_icon(generate_types_button_, get_editor_theme_icon("BoxMesh"));
+        generate_types_button_->set_button_icon(get_editor_theme_icon("BoxMesh"));
     }
-    jsb::ButtonCompat::set_icon(install_project_files_button_, get_editor_theme_icon("Window"));
+    install_project_files_button_->set_button_icon(get_editor_theme_icon("Window"));
     check_tsc();
 }
 
@@ -166,12 +178,12 @@ void GodotJSREPL::check_tsc()
 #if JSB_USE_TYPESCRIPT
     if (GodotJSEditorPlugin* editor_plugin = GodotJSEditorPlugin::get_singleton(); editor_plugin && editor_plugin->is_tsc_watching())
     {
-        jsb::ButtonCompat::set_icon(start_tsc_button_, get_editor_theme_icon("Stop"));
+        start_tsc_button_->set_button_icon(get_editor_theme_icon("Stop"));
         start_tsc_button_->set_tooltip_text(TTR("Stop tsc"));
     }
     else
     {
-        jsb::ButtonCompat::set_icon(start_tsc_button_, get_editor_theme_icon("GodotJSRun"));
+        start_tsc_button_->set_button_icon(get_editor_theme_icon("GodotJSRun"));
         start_tsc_button_->set_tooltip_text(TTR("Start tsc (watch)"));
     }
 #endif
@@ -238,7 +250,7 @@ void GodotJSREPL::_input_changed(const String &p_text)
     _show_candidates(results);
 }
 
-void GodotJSREPL::_show_candidates(const Vector<String>& p_items)
+void GodotJSREPL::_show_candidates(const PackedStringArray& p_items)
 {
     candidate_list_->clear();
     if (p_items.is_empty())
@@ -255,7 +267,7 @@ void GodotJSREPL::_show_candidates(const Vector<String>& p_items)
     const Vector2 origin = input_box_->get_position();
     const Vector2 input_size = input_box_->get_size();
     const Vector2 pos(origin.x, origin.y - size.y - input_size.y);
-    candidate_list_->set_current(0);
+    candidate_list_->select(0);
     candidate_list_->set_position(pos);
     candidate_list_->show();
 }
@@ -281,16 +293,17 @@ void GodotJSREPL::_input_gui_input(const Ref<InputEvent>& p_event)
     }
 
     const int item_count = candidate_list_->get_item_count();
-    const int current = candidate_list_->get_current();
+    PackedInt32Array selected = candidate_list_->get_selected_items();
+    const int current = selected.size() > 0 ? selected[0] : 0;
     if (k->is_action_pressed("ui_text_caret_up", true))
     {
-        candidate_list_->set_current(current > 0 ? current - 1 : item_count - 1);
+        candidate_list_->select(current > 0 ? current - 1 : item_count - 1);
         candidate_list_->ensure_current_is_visible();
         input_box_->accept_event();
     }
     else if (k->is_action_pressed("ui_text_caret_down", true))
     {
-        candidate_list_->set_current(current < item_count - 1 ? current + 1 : 0);
+        candidate_list_->select(current < item_count - 1 ? current + 1 : 0);
         candidate_list_->ensure_current_is_visible();
         input_box_->accept_event();
     }
@@ -329,12 +342,12 @@ jsb::JSValueMove GodotJSREPL::eval_source(const String& p_code)
 void GodotJSREPL::add_line(const String &p_line)
 {
     output_box_->add_text(p_line);
-    output_box_->add_newline();
+    output_box_->newline();
 }
 
 void GodotJSREPL::add_string(const String &p_str)
 {
-    const Vector<String> lines = p_str.split("\n", true);
+    const PackedStringArray lines = p_str.split("\n", true);
     // const int line_count = lines.size();
     for (const String& line: lines)
     {

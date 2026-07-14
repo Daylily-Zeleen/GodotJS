@@ -16,6 +16,6 @@
 
 #include "../weaver/jsb_script_language.h"
 
-#include <core/object/callable_mp.h>
+#include <godot_cpp/variant/callable_method_pointer.hpp>
 
 #endif

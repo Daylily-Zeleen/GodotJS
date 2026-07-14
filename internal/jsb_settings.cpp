@@ -1,19 +1,75 @@
 #include "jsb_settings.h"
 
-#include "core/io/resource_uid.h"
 #include "jsb_internal_pch.h"
 #include "jsb_macros.h"
 #include "jsb_logger.h"
 
+#include <godot_cpp/classes/resource_uid.hpp>
+
 #ifdef TOOLS_ENABLED
 #include "../weaver-editor/jsb_editor_helper.h"
-#include "core/templates/pair.h"
 #endif // TOOLS_ENABLED
 
 #define JSB_SET_RESTART(val) (val)
 #define JSB_SET_IGNORE_DOCS(val) (val)
 #define JSB_SET_BASIC(val) (val)
 #define JSB_SET_INTERNAL(val) (val)
+
+#pragma region Compatible
+static EditorSettings* get_editor_settings()
+{
+    if (EditorInterface* ei = EditorInterface::get_singleton())
+    {
+        return EditorInterface::get_singleton()->get_editor_settings().ptr();
+    }
+    return nullptr;
+}
+
+Variant _EDITOR_DEF(const String &p_setting, const Variant &p_default, bool p_restart_if_changed = false, bool p_basic = false) {
+    EditorSettings *editor_settings = get_editor_settings();
+	ERR_FAIL_NULL_V_MSG(editor_settings, p_default, "EditorSettings not instantiated yet.");
+
+	Variant ret = p_default;
+	if (editor_settings->has_setting(p_setting)) {
+		ret = EDITOR_GET(p_setting);
+	} else {
+        bool blocking_signals = editor_settings;
+        editor_settings->set_block_signals(true);
+		editor_settings->set_setting(p_setting, p_default);
+        editor_settings->set_block_signals(blocking_signals);
+	}
+	// editor_settings->set_restart_if_changed(p_setting, p_restart_if_changed); // TODO: EditorSettings 未暴露该接口
+	// editor_settings->set_basic(p_setting, p_basic);
+
+    editor_settings->set_initial_value(p_setting, p_default, false);
+	return ret;
+}
+
+
+Variant _GLOBAL_DEF(const String &p_var, const Variant &p_default, bool p_restart_if_changed = false, bool p_ignore_value_in_docs = false, bool p_basic = false, bool p_internal = false) {
+	Variant ret;
+	if (!ProjectSettings::get_singleton()->has_setting(p_var)) {
+		ProjectSettings::get_singleton()->set(p_var, p_default);
+	}
+	ret = GLOBAL_GET(p_var);
+
+	ProjectSettings::get_singleton()->set_initial_value(p_var, p_default);
+	// ProjectSettings::get_singleton()->set_builtin_order(p_var);
+	ProjectSettings::get_singleton()->set_as_basic(p_var, p_basic);
+	ProjectSettings::get_singleton()->set_restart_if_changed(p_var, p_restart_if_changed);
+	// ProjectSettings::get_singleton()->set_ignore_value_in_docs(p_var, p_ignore_value_in_docs);
+	ProjectSettings::get_singleton()->set_as_internal(p_var, p_internal);
+	return ret;
+}
+
+Variant _GLOBAL_DEF(const PropertyInfo &p_info, const Variant &p_default, bool p_restart_if_changed = false, bool p_ignore_value_in_docs = false, bool p_basic = false, bool p_internal = false) {
+	Variant ret = _GLOBAL_DEF(p_info.name, p_default, p_restart_if_changed, p_ignore_value_in_docs, p_basic, p_internal);
+    Dictionary info = p_info.operator Dictionary();
+    CRASH_COND_MSG(info.has("usage"), "ProjectSettings's setting can't has any usage");
+	ProjectSettings::get_singleton()->add_property_info(info);
+	return ret;
+}
+#pragma endregion Compatible
 
 namespace jsb::internal
 {
@@ -60,12 +116,11 @@ namespace jsb::internal
         static bool inited = false;
         if (!inited)
         {
-            if (!EditorSettings::get_singleton())
+            if (!get_editor_settings())
             {
-                if (Engine::get_singleton()->is_editor_hint() || Engine::get_singleton()->is_project_manager_hint() || jsb_ext_is_cmdline_tool())
+                if (Engine::get_singleton()->is_editor_hint() || jsb_ext_is_cmdline_tool())
                 {
-                    EditorSettings::create();
-                    jsb_check(EditorSettings::get_singleton());
+                    CRASH_COND_MSG(get_editor_settings() == nullptr, "EditorSettings is unavailable.");
                 }
                 else
                 {
@@ -74,7 +129,7 @@ namespace jsb::internal
             }
 
             // check before read to avoid redundant warnings
-            if (EditorSettings::get_singleton())
+            if (get_editor_settings())
             {
                 inited = true;
                 _EDITOR_DEF(kEdDebuggerPort, 9230, true);
@@ -191,7 +246,7 @@ namespace jsb::internal
                     {"Unique Name Node", GodotJSEditorHelper::SCENE_DTS_GENERATE_STRATEGIC_UNIQUE_NAME_NODE}
                 };
 
-                Vector<String> flag_hints;
+                PackedStringArray flag_hints;
                 for (const auto &[name, value]: scene_dts_generate_strategic_flags)
                 {
                     flag_hints.push_back(vformat("%s:%s", name, value));
@@ -208,7 +263,7 @@ namespace jsb::internal
 #ifdef TOOLS_ENABLED
     bool Settings::editor_settings_available()
     {
-        return EditorSettings::get_singleton() != nullptr || Engine::get_singleton()->is_editor_hint() || Engine::get_singleton()->is_project_manager_hint() || jsb_ext_is_cmdline_tool();
+        return get_editor_settings() || Engine::get_singleton()->is_editor_hint() || jsb_ext_is_cmdline_tool();
     }
 
     PackedStringArray Settings::get_ignored_classes()
@@ -355,9 +410,8 @@ namespace jsb::internal
 
     String Settings::get_project_data_dir_name()
     {
-        const String project_data_dir = ProjectSettings::get_singleton()->get_project_data_dir_name();
-        jsb_check(!project_data_dir.is_empty());
-        return project_data_dir;
+        bool use_hidden_directory = GLOBAL_GET("application/config/use_hidden_project_data_directory");
+        return use_hidden_directory ? ".godot" : "godot";
     }
 
     String Settings::get_jsb_out_dir_name()
@@ -385,7 +439,7 @@ namespace jsb::internal
     {
         init_settings();
         const String path = GLOBAL_GET(kRtEntryScriptPath);
-        return ResourceUID::get_singleton()->ensure_path(path);
+        return ResourceUID::ensure_path(path);
     }
 
     bool Settings::get_camel_case_bindings_enabled()

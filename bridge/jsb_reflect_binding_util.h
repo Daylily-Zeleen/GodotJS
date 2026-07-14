@@ -1,10 +1,10 @@
 #ifndef GODOTJS_REFLECT_BINDING_UTIL_H
 #define GODOTJS_REFLECT_BINDING_UTIL_H
+#include "godot_cpp/core/builtin_ptrcall.hpp"
+#include "godot_cpp/variant/variant_internal.hpp"
 #include "jsb_object_handle.h"
-#include "jsb_bridge_pch.h"
 #include "jsb_environment.h"
 #include "jsb_static_binding_util.h"
-#include "../internal/jsb_variant_info.h"
 
 #define GetVariantInfoCollection(env) (env)->get_variant_info_collection() // ::jsb::internal::VariantInfoCollection::global
 
@@ -55,7 +55,7 @@ namespace jsb
                 jsb_throw(isolate, "this is not PackedByteArray");
                 return;
             }
-            info.GetReturnValue().Set(impl::Helper::to_array_buffer(isolate, var));
+            info.GetReturnValue().Set(impl::Helper::to_array_buffer<PackedByteArray>(isolate, var));
         }
     };
 
@@ -114,6 +114,7 @@ namespace jsb
     JSB_DEFINE_VARIANT_OPAQUE_POINTER(PackedColorArray, get_color_array)
     JSB_DEFINE_VARIANT_OPAQUE_POINTER(PackedVector4Array, get_vector4_array)
 
+    // TODO: 以下内容改为在构建时根据 extension_api.json 生成，妈的哪来的傻逼全部硬编码
     // not supported
     template<typename OwnerT, typename ReturnT, typename... Ts>
     struct ReflectBuiltinMethodPointerCall
@@ -133,7 +134,7 @@ namespace jsb
         template<bool IsInstanceCallT>
         static void call(const v8::FunctionCallbackInfo<v8::Value>& info)
         {
-            const Variant::PTRBuiltInMethod func = (const Variant::PTRBuiltInMethod) info.Data().As<v8::External>()->Value();
+            const ::godot::PTRBuiltInMethod func = (const ::godot::PTRBuiltInMethod) info.Data().As<v8::External>()->Value();
             if constexpr (IsInstanceCallT) func(TVariantOpaquePointer<OwnerT>::from(info), nullptr, nullptr, 0);
             else func(nullptr, nullptr, nullptr, 0);
         }
@@ -155,7 +156,7 @@ namespace jsb
                 jsb_throw(isolate, "bad param at 0");
                 return;
             }
-            const Variant::PTRBuiltInMethod func = (const Variant::PTRBuiltInMethod) info.Data().As<v8::External>()->Value();
+            const ::godot::PTRBuiltInMethod func = (const ::godot::PTRBuiltInMethod) info.Data().As<v8::External>()->Value();
             const void* args[] = { &loc_0 };
             if constexpr (IsInstanceCallT) func(TVariantOpaquePointer<OwnerT>::from(info), args, nullptr, 0);
             else func(nullptr, args, nullptr, 0);
@@ -172,7 +173,7 @@ namespace jsb
         static void call(const v8::FunctionCallbackInfo<v8::Value>& info)
         {
             v8::Isolate* isolate = info.GetIsolate();
-            const Variant::PTRBuiltInMethod func = (const Variant::PTRBuiltInMethod) info.Data().As<v8::External>()->Value();
+            const ::godot::PTRBuiltInMethod func = (const ::godot::PTRBuiltInMethod) info.Data().As<v8::External>()->Value();
             GDTransitionNumber<real_t> value = 0;
             if constexpr (IsInstanceCallT) func(TVariantOpaquePointer<OwnerT>::from(info), nullptr, &value, 0);
             else func(nullptr, nullptr, &value, 0);
@@ -190,7 +191,7 @@ namespace jsb
         static void call(const v8::FunctionCallbackInfo<v8::Value>& info)
         {
             v8::Isolate* isolate = info.GetIsolate();
-            const Variant::PTRBuiltInMethod func = (const Variant::PTRBuiltInMethod) info.Data().As<v8::External>()->Value();
+            const ::godot::PTRBuiltInMethod func = (const ::godot::PTRBuiltInMethod) info.Data().As<v8::External>()->Value();
             GDTransitionNumber<int32_t> value = 0;
             if constexpr (IsInstanceCallT) func(TVariantOpaquePointer<OwnerT>::from(info), nullptr, &value, 0);
             else func(nullptr, nullptr, &value, 0);
@@ -208,7 +209,7 @@ namespace jsb
         static void call(const v8::FunctionCallbackInfo<v8::Value>& info)
         {
             v8::Isolate* isolate = info.GetIsolate();
-            const Variant::PTRBuiltInMethod func = (const Variant::PTRBuiltInMethod) info.Data().As<v8::External>()->Value();
+            const ::godot::PTRBuiltInMethod func = (const ::godot::PTRBuiltInMethod) info.Data().As<v8::External>()->Value();
             bool value = false;
             if constexpr (IsInstanceCallT) func(TVariantOpaquePointer<OwnerT>::from(info), nullptr, &value, 0);
             else func(nullptr, nullptr, &value, 0);
@@ -232,7 +233,7 @@ namespace jsb
                 jsb_throw(isolate, "bad param at 0");
                 return;
             }
-            const Variant::PTRBuiltInMethod func = (const Variant::PTRBuiltInMethod) info.Data().As<v8::External>()->Value();
+            const ::godot::PTRBuiltInMethod func = (const ::godot::PTRBuiltInMethod) info.Data().As<v8::External>()->Value();
             const void* args[] = { &loc_0 };
             GDTransitionNumber<real_t> value = 0;
             if constexpr (IsInstanceCallT) func(TVariantOpaquePointer<OwnerT>::from(info), args, &value, 0);
@@ -259,7 +260,7 @@ namespace jsb
         static void _getter(const v8::FunctionCallbackInfo<v8::Value>& info)
         {
             v8::Isolate* isolate = info.GetIsolate();
-            const Variant::PTRGetter getter_func = (const Variant::PTRGetter) info.Data().As<v8::External>()->Value();
+            const ::godot::PTRGetter getter_func = (const ::godot::PTRGetter) info.Data().As<v8::External>()->Value();
 
             GDTransitionNumber<real_t> value[] = { 0 };
             getter_func(TVariantOpaquePointer<OwnerT>::from(info), &value);
@@ -270,7 +271,7 @@ namespace jsb
         {
             v8::Isolate* isolate = info.GetIsolate();
             const v8::Local<v8::Context> context = isolate->GetCurrentContext();
-            const Variant::PTRSetter setter_func = (const Variant::PTRSetter) info.Data().As<v8::External>()->Value();
+            const ::godot::PTRSetter setter_func = (const ::godot::PTRSetter) info.Data().As<v8::External>()->Value();
             GDTransitionNumber<real_t> value;
             if (!StaticBindingUtil<GDTransitionNumber<real_t>>::get(isolate, context, info[0], value))
             {
@@ -290,7 +291,7 @@ namespace jsb
         static void _getter(const v8::FunctionCallbackInfo<v8::Value>& info)
         {
             v8::Isolate* isolate = info.GetIsolate();
-            const Variant::PTRGetter getter_func = (const Variant::PTRGetter) info.Data().As<v8::External>()->Value();
+            const ::godot::PTRGetter getter_func = (const ::godot::PTRGetter) info.Data().As<v8::External>()->Value();
 
             GDTransitionNumber<int32_t> value[] = { 0 };
             getter_func(TVariantOpaquePointer<OwnerT>::from(info), &value);
@@ -305,7 +306,7 @@ namespace jsb
                 jsb_throw(info.GetIsolate(), "bad param");
                 return;
             }
-            const Variant::PTRSetter setter_func = (const Variant::PTRSetter) info.Data().As<v8::External>()->Value();
+            const ::godot::PTRSetter setter_func = (const ::godot::PTRSetter) info.Data().As<v8::External>()->Value();
             setter_func(TVariantOpaquePointer<OwnerT>::from(info), &value);
         }
 
@@ -323,7 +324,7 @@ namespace jsb
     {
         jsb_force_inline static void bind_valuetype(v8::Isolate* isolate, const v8::Local<v8::Object>& p_object, const TStruct& p_value)
         {
-            static_assert(GetTypeInfo<TStruct>::VARIANT_TYPE != Variant::VARIANT_MAX);
+            static_assert((godot::Variant::Type)GetTypeInfo<TStruct>::VARIANT_TYPE != Variant::VARIANT_MAX);
             Environment* env = Environment::wrap(isolate);
             Variant* pointer = env->alloc_variant();
             *pointer = p_value;

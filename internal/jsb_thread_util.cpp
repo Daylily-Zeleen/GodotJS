@@ -1,6 +1,8 @@
 #include "jsb_thread_util.h"
 #include "jsb_macros.h"
 
+#include <godot_cpp/classes/os.hpp>
+
 #ifdef WINDOWS_ENABLED
 #   define WIN32_LEAN_AND_MEAN
 #   include <windows.h>
@@ -39,7 +41,7 @@ namespace jsb::internal
             }
         }
 #endif
-        ::Thread::set_name(p_name);
+        godot::OS::get_singleton()->set_thread_name(p_name);
     }
 
 }

@@ -4,18 +4,18 @@
 #include "../compat/jsb_compat.h"
 #include "../impl/shared/jsb_custom_field.h"
 
-class Tree;
-class TreeItem;
-class Timer;
+#include <godot_cpp/classes/v_box_container.hpp>
+#include <godot_cpp/classes/tree.hpp>
+#include <godot_cpp/classes/timer.hpp>
 
 class GodotJSStatisticsViewer : public VBoxContainer
 {
-    GDCLASS(GodotJSStatisticsViewer, VBoxContainer)
+	GDCLASS(GodotJSStatisticsViewer, VBoxContainer)
 
 private:
-    Tree* tree;
-    TreeItem* tree_root;
-    Timer* timer;
+	Tree* tree;
+	TreeItem* tree_root;
+	Timer* timer;
 
 public:
     GodotJSStatisticsViewer();

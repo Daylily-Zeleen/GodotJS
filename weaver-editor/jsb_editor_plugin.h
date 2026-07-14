@@ -3,6 +3,10 @@
 
 #include "jsb_editor_pch.h"
 
+#include <godot_cpp/classes/confirmation_dialog.hpp>
+#include <godot_cpp/classes/editor_file_system_directory.hpp>
+#include <godot_cpp/classes/editor_plugin.hpp>
+
 #include <functional>
 
 namespace jsb::weaver
@@ -51,6 +55,7 @@ class GodotJSEditorPlugin : public EditorPlugin
     GDCLASS(GodotJSEditorPlugin, EditorPlugin)
 
 private:
+    Ref<class GodotJSExportPlugin> export_plugin_;
     Vector<jsb::weaver::InstallFileInfo> install_files_;
     InstallGodotJSPresetConfirmationDialog* confirm_dialog_;
 
@@ -58,7 +63,7 @@ private:
 
     void _on_scene_saved(const String& p_path);
     void _on_resource_saved(const Ref<Resource>& p_resource);
-    void _generate_imported_resource_dts(const Vector<String>& p_resources);
+    void _generate_imported_resource_dts(const PackedStringArray& p_resources);
     void _generate_types_from_cmdline();
 
 	static void _on_generate_completed(const v8::FunctionCallbackInfo<v8::Value>& info);
@@ -84,8 +89,8 @@ protected:
     static bool delete_file(const String& p_file);
     static void get_all_scenes(EditorFileSystemDirectory* p_dir, Vector<String>& r_list);
     static void get_all_resources(EditorFileSystemDirectory* p_dir, Vector<String>& r_list);
-    static void generate_scene_nodes_types(std::function<void(bool)> complete, const Vector<String>& p_paths);
-    static void generate_resource_types(std::function<void(bool)> complete, const Vector<String>& p_paths);
+    static void generate_scene_nodes_types(std::function<void(bool)> complete, const Vector<String>& p_paths); // TODO: Vector<String> 改为 PackedStringArray
+    static void generate_resource_types(std::function<void(bool)> complete, const Vector<String>& p_paths); // TODO: Vector<String> 改为 PackedStringArray
 
 public:
     GodotJSEditorPlugin();
@@ -128,6 +133,12 @@ public:
     static void on_successfully_installed();
 
     static void load_editor_entry_module();
+
+private:
+    // Editor Progress Helpers. In c++, use EditorProgress directly.
+    static void _add_progress_task(const String& p_task_name, int total_steps);
+    static void _update_progress_task(const String& p_task_name, const String& p_state, int p_step);
+    static void _finish_progress_task(const String& p_task_name);
 };
 
 #endif

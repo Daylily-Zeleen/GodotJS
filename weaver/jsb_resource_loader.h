@@ -3,17 +3,18 @@
 
 #include "../compat/jsb_compat.h"
 
+#include <godot_cpp/classes/resource_format_loader.hpp>
+
 class ResourceFormatLoaderGodotJSScript : public ResourceFormatLoader
 {
 public:
-    virtual Ref<Resource> load(const String& p_path, const String& p_original_path = "", Error* r_error = nullptr, bool p_use_sub_threads = false, float* r_progress = nullptr, CacheMode p_cache_mode = CACHE_MODE_REUSE) override;
-    virtual void get_recognized_extensions(List<String>* p_extensions) const override;
-    virtual bool handles_type(const String& p_type) const override;
-    virtual String get_resource_type(const String& p_path) const override;
-    virtual void get_dependencies(const String& p_path, List<String>* p_dependencies, bool p_add_types = false) override;
-
-	virtual ResourceUID::ID get_resource_uid(const String &p_path) const override;
-	virtual bool has_custom_uid_support() const override;
+    virtual Variant _load(const String& p_path, const String& p_original_path, bool p_use_sub_threads, int32_t p_cache_mode) const override;
+    virtual PackedStringArray _get_recognized_extensions() const override;
+    virtual bool _handles_type(const StringName& p_type) const override;
+    virtual String _get_resource_type(const String& p_path) const override;
+    virtual PackedStringArray _get_dependencies(const String& p_path, bool p_add_types) const override;
+	virtual int64_t _get_resource_uid(const String& p_path) const override;
+    // virtual bool has_custom_uid_support() const override;
 };
 
 #endif

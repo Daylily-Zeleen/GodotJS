@@ -62,6 +62,7 @@ namespace jsb::impl
             SymbolClass,
             MapClass,
             SetClass,
+            ProxyClass,
             Exception,
 
             Num,
@@ -216,9 +217,11 @@ namespace v8
         }
 
         // due to the missing QuickJS API for NewSymbol/NewMap/NewSet
+        uint16_t push_symbol(JSValue description_str);
         uint16_t push_symbol();
         uint16_t push_map();
         uint16_t push_set();
+        uint16_t push_proxy(JSValue target_obj, JSValue handler_obj);
 
         // no copy on value
         uint16_t push_steal(const JSValue value)

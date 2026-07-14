@@ -2,6 +2,7 @@
 #define GODOTJS_VARIANT_UTIL_H
 #include "jsb_internal_pch.h"
 #include "jsb_string_names.h"
+#include "jsb_naming_util.h"
 
 namespace jsb::internal
 {
@@ -23,7 +24,7 @@ namespace jsb::internal
 
     struct VariantReferentialComparator {
         static bool compare(const Variant& p_a, const Variant& p_b) {
-            return p_a.identity_compare(p_b);
+            return godot::UtilityFunctions::is_same(p_a, p_b);
         }
     };
 
@@ -123,27 +124,15 @@ namespace jsb::internal
             return p_argc <= p_expected_num && p_argc + p_default_num >= p_expected_num;
         }
 
-#if GODOT_4_4_OR_NEWER
         jsb_force_inline static String to_snake_case_id(const String& p_name)
         {
-            return p_name.to_snake_case().validate_ascii_identifier();
+            return NamingUtil::validate_ascii_identifier(p_name.to_snake_case());
         }
 
         jsb_force_inline static String to_pascal_case_id(const String& p_name)
         {
-            return p_name.to_pascal_case().validate_ascii_identifier();
+            return NamingUtil::validate_ascii_identifier(p_name.to_pascal_case());
         }
-#else
-        jsb_force_inline static String to_snake_case_id(const String& p_name)
-        {
-            return p_name.to_snake_case().validate_identifier();
-        }
-
-        jsb_force_inline static String to_pascal_case_id(const String& p_name)
-        {
-            return p_name.to_pascal_case().validate_identifier();
-        }
-#endif
 
         jsb_force_inline static Variant::Type get_element_type(Variant::Type p_type)
         {
@@ -169,7 +158,7 @@ namespace jsb::internal
         jsb_force_inline static void construct_variant(Variant& r_value, Variant::Type p_type)
         {
 #if JSB_CONSTRUCT_DEFAULT_VARIANT_SLOW
-            Callable::CallError err;
+            GDExtensionCallError err;
             Variant::construct(p_type, r_value, nullptr, 0, err);
 #else
             static Variant dummy = {};
@@ -182,7 +171,7 @@ namespace jsb::internal
          */
         jsb_force_inline static bool is_valid_name(const StringName& p_name)
         {
-            return p_name.data_unique_pointer() != nullptr;
+            return !p_name.is_empty();
         }
 
         static Variant structured_clone(const Variant& p_variant, ReferentialVariantMap<Variant>& p_clone_map, bool& r_valid, int p_recursion_count = 0);

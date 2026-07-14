@@ -8,6 +8,7 @@
 #include "jsb_type_convert.h"
 #include "../internal/jsb_variant_info.h"
 #include "../internal/jsb_variant_util.h"
+#include <gen/variant_builtin_ext.gen.h>
 
 #define JSB_DEFINE_OPERATOR2(op_code) class_builder.Static().\
     Method(JSB_OPERATOR_NAME(op_code), BinaryOperator::invoke, (int32_t) Variant::OP_##op_code);\
@@ -22,8 +23,8 @@
     if (TReflectGetSetPointerCall<T, ForMemberCppType>::is_supported(ForMemberVariantType))\
     {\
         class_builder.Instance().Property(PropName,\
-            TReflectGetSetPointerCall<T, ForMemberCppType>::_getter, (void*) Variant::get_member_ptr_getter(TYPE, PropName),\
-            TReflectGetSetPointerCall<T, ForMemberCppType>::_setter, (void*) Variant::get_member_ptr_setter(TYPE, PropName)\
+            TReflectGetSetPointerCall<T, ForMemberCppType>::_getter, (void*) VariantExt::get_member_ptr_getter(TYPE, PropName),\
+            TReflectGetSetPointerCall<T, ForMemberCppType>::_setter, (void*) VariantExt::get_member_ptr_setter(TYPE, PropName)\
         );\
         continue;\
     } (void) 0
@@ -57,6 +58,44 @@
         }\
     };
 
+static const String &get_variant_operator_name(Variant::Operator p_op) {
+#define __VAR_OP_TO_TEXT(op) { Variant::Operator::op, (#op) }
+    static const HashMap<Variant::Operator, String> search = {
+		// comparison
+		__VAR_OP_TO_TEXT(OP_EQUAL),
+		__VAR_OP_TO_TEXT(OP_NOT_EQUAL),
+		__VAR_OP_TO_TEXT(OP_LESS),
+		__VAR_OP_TO_TEXT(OP_LESS_EQUAL),
+		__VAR_OP_TO_TEXT(OP_GREATER),
+		__VAR_OP_TO_TEXT(OP_GREATER_EQUAL),
+		// mathematic
+		__VAR_OP_TO_TEXT(OP_ADD),
+		__VAR_OP_TO_TEXT(OP_SUBTRACT),
+		__VAR_OP_TO_TEXT(OP_MULTIPLY),
+		__VAR_OP_TO_TEXT(OP_DIVIDE),
+		__VAR_OP_TO_TEXT(OP_NEGATE),
+		__VAR_OP_TO_TEXT(OP_POSITIVE),
+		__VAR_OP_TO_TEXT(OP_MODULE),
+		__VAR_OP_TO_TEXT(OP_POWER),
+		// bitwise
+		__VAR_OP_TO_TEXT(OP_SHIFT_LEFT),
+		__VAR_OP_TO_TEXT(OP_SHIFT_RIGHT),
+		__VAR_OP_TO_TEXT(OP_BIT_AND),
+		__VAR_OP_TO_TEXT(OP_BIT_OR),
+		__VAR_OP_TO_TEXT(OP_BIT_XOR),
+		__VAR_OP_TO_TEXT(OP_BIT_NEGATE),
+		// logic
+		__VAR_OP_TO_TEXT(OP_AND),
+		__VAR_OP_TO_TEXT(OP_OR),
+		__VAR_OP_TO_TEXT(OP_XOR),
+		__VAR_OP_TO_TEXT(OP_NOT),
+		// containment
+		__VAR_OP_TO_TEXT(OP_IN),
+		__VAR_OP_TO_TEXT(OP_MAX),
+    };
+    return search[p_op];
+}
+
 namespace jsb
 {
     struct BinaryOperator
@@ -77,21 +116,16 @@ namespace jsb
                 jsb_throw(isolate, "bad translation");
                 return;
             }
-            const Variant::Type left_type = left.get_type();
-            const Variant::Type right_type = right.get_type();
-            const Variant::ValidatedOperatorEvaluator func = Variant::get_validated_operator_evaluator(op, left_type, right_type);
-            if (!func)
-            {
-                jsb_throw(isolate, "bad type (no operator)");
-                return;
-            }
             Variant ret;
-            const Variant::Type return_type = Variant::get_operator_return_type(op, left_type, right_type);
-            internal::VariantUtil::construct_variant(ret, return_type);
-            func(&left, &right, &ret);
-            if (ret.get_type() != return_type)
+            bool r_valid = false;
+            Variant::evaluate(op, left, right, ret, r_valid);
+            if (!r_valid)
             {
-                jsb_throw(isolate, "bad return");
+                jsb_throw(isolate, jsb_format(
+                    "bad operation(%s) between %s and %s.", 
+                    get_variant_operator_name(op),
+                    Variant::get_type_name(left.get_type()),
+                    Variant::get_type_name(right.get_type())));
                 return;
             }
 
@@ -124,21 +158,12 @@ namespace jsb
                 jsb_throw(isolate, "bad translation");
                 return;
             }
-            const Variant::Type left_type = left.get_type();
-            constexpr Variant::Type right_type = Variant::NIL;
-            const Variant::ValidatedOperatorEvaluator func = Variant::get_validated_operator_evaluator(op, left_type, right_type);
-            if (!func)
-            {
-                jsb_throw(isolate, "bad type (no operator)");
-                return;
-            }
             Variant ret;
-            const Variant::Type return_type = Variant::get_operator_return_type(op, left_type, right_type);
-            internal::VariantUtil::construct_variant(ret, return_type);
-            func(&left, &right, &ret);
-            if (ret.get_type() != return_type)
+            bool r_valid = false;
+            Variant::evaluate(op, left, right, ret, r_valid);
+            if (!r_valid)
             {
-                jsb_throw(isolate, "bad return");
+                jsb_throw(isolate, jsb_format("bad operation(%s) on %s.", get_variant_operator_name(op), Variant::get_type_name(left.get_type())));
                 return;
             }
 
@@ -214,7 +239,7 @@ namespace jsb
                         // revert all constructors
                         const String error_message = jsb_errorf("bad argument: %d", argument_index);
                         while (argument_index >= 0) { args[argument_index--].~Variant(); }
-                        impl::Helper::throw_error(isolate, error_message);
+                        jsb_throw(isolate, error_message);
                         return;
                     }
 
@@ -255,7 +280,7 @@ namespace jsb
     template<typename T>
     struct VariantBind
     {
-        static constexpr Variant::Type TYPE = GetTypeInfo<T>::VARIANT_TYPE;
+        static constexpr Variant::Type TYPE = static_cast<Variant::Type>(GetTypeInfo<T>::VARIANT_TYPE);
 
         static void _get_constant_value_lazy(v8::Local<v8::Name> name, const v8::PropertyCallbackInfo<v8::Value>& info)
         {
@@ -263,7 +288,7 @@ namespace jsb
             v8::Local<v8::Context> context = isolate->GetCurrentContext();
             const StringName constant = impl::Helper::to_string(isolate, name);
             bool r_valid;
-            const Variant constant_value = Variant::get_constant_value(TYPE, constant, &r_valid);
+            const Variant constant_value = VariantExt::get_constant_value(TYPE, constant, &r_valid);
             jsb_check(r_valid);
             v8::Local<v8::Value> rval;
             if (!TypeConvert::gd_var_to_js(isolate, context, constant_value, rval))
@@ -328,7 +353,7 @@ namespace jsb
             v8::Isolate* isolate = info.GetIsolate();
             const v8::Local<v8::Context> context = isolate->GetCurrentContext();
             jsb_check(TypeConvert::is_variant(info.This()));
-            const Variant::Type element_type = Variant::get_indexed_element_type(TYPE);
+            const Variant::Type element_type = VariantExt::get_indexed_element_type(TYPE);
             if (info.Length() != 2
                 || !info[0]->IsNumber() // loose int32 check
                 || !TypeConvert::can_convert_strict(isolate, context, info[1], element_type))
@@ -374,7 +399,7 @@ namespace jsb
             }
             v8::Local<v8::Value> r_val;
             // nil type is treated as any type
-            if (const Variant::Type element_type = Variant::get_indexed_element_type(TYPE);
+            if (const Variant::Type element_type = VariantExt::get_indexed_element_type(TYPE);
                 !TypeConvert::gd_var_to_js(isolate, context, value, element_type, r_val))
             {
                 jsb_throw(isolate, "bad translation");
@@ -498,7 +523,7 @@ namespace jsb
                 // revert all constructors
                 const String error_message = jsb_errorf("bad argument: %d", utility ? index + 1 : index);
                 while (index >= 0) { args[index--].~Variant(); }
-                impl::Helper::throw_error(isolate, error_message);
+                jsb_throw(isolate, error_message);
                 return;
             }
 
@@ -605,21 +630,17 @@ namespace jsb
                 const uint32_t constructor_index = (uint32_t) GetVariantInfoCollection(p_env.env).constructors.size();
                 GetVariantInfoCollection(p_env.env).constructors.append({});
                 internal::FConstructorInfo& constructor_info = GetVariantInfoCollection(p_env.env).constructors.write[constructor_index];
-                const int count = Variant::get_constructor_count(TYPE);
-#if GODOT_4_5_OR_NEWER
-                constructor_info.variants.resize_initialized(count);
-#else
+                const int count = VariantExt::get_constructor_count(TYPE);
                 constructor_info.variants.resize_zeroed(count);
-#endif
                 for (int index = 0; index < count; ++index)
                 {
                     internal::FConstructorVariantInfo& variant_info = constructor_info.variants.write[index];
-                    variant_info.ctor_func = Variant::get_validated_constructor(TYPE, index);
-                    const int arg_count = Variant::get_constructor_argument_count(TYPE, index);
+                    variant_info.ctor_func = VariantExt::get_validated_constructor(TYPE, index);
+                    const int arg_count = VariantExt::get_constructor_argument_count(TYPE, index);
                     variant_info.argument_types.resize(arg_count);
                     for (int arg_index = 0; arg_index < arg_count; ++arg_index)
                     {
-                        variant_info.argument_types.write[arg_index] = Variant::get_constructor_argument_type(TYPE, index, arg_index);
+                        variant_info.argument_types.write[arg_index] = VariantExt::get_constructor_argument_type(TYPE, index, arg_index);
                     }
                 }
                 return impl::ClassBuilder::New<IF_VariantFieldCount>(p_env.isolate,
@@ -645,10 +666,10 @@ namespace jsb
             // properties (getset)
             {
                 List<StringName> members;
-                Variant::get_member_list(TYPE, &members);
+                VariantExt::get_member_list(TYPE, &members);
                 for (const StringName& name : members)
                 {
-                    const Variant::Type member_type = Variant::get_member_type(TYPE, name);
+                    const Variant::Type member_type = VariantExt::get_member_type(TYPE, name);
 
                     JSB_DEFINE_FAST_GETSET(member_type, real_t, name);
                     JSB_DEFINE_FAST_GETSET(member_type, int32_t, name);
@@ -656,23 +677,23 @@ namespace jsb
                     // fallback to reflection invocation
                     const int collection_index = (int) GetVariantInfoCollection(p_env.env).getsets.size();
                     GetVariantInfoCollection(p_env.env).getsets.append({
-                       Variant::get_member_validated_setter(TYPE, name),
-                       Variant::get_member_validated_getter(TYPE, name),
-                       member_type});
+                        VariantExt::get_member_validated_setter(TYPE, name),
+                        VariantExt::get_member_validated_getter(TYPE, name),
+                        member_type});
 
                     class_builder.Instance().Property(internal::NamingUtil::get_member_name(name), _getter, _setter, collection_index);
                 }
             }
 
             // indexed accessor
-            if (Variant::has_indexing(TYPE))
+            if (VariantExt::has_indexing(TYPE))
             {
                 class_builder.Instance().Method(internal::NamingUtil::get_member_name("set_indexed"), _set_indexed);
                 class_builder.Instance().Method(internal::NamingUtil::get_member_name("get_indexed"), _get_indexed);
             }
 
             // keyed accessor
-            if (Variant::is_keyed(TYPE))
+            if (VariantExt::is_keyed(TYPE))
             {
                 class_builder.Instance().Method(internal::NamingUtil::get_member_name("set_keyed"), _set_keyed);
                 class_builder.Instance().Method(internal::NamingUtil::get_member_name("get_keyed"), _get_keyed);
@@ -681,16 +702,16 @@ namespace jsb
             // methods
             {
                 List<StringName> methods;
-                Variant::get_builtin_method_list(TYPE, &methods);
+                VariantExt::get_builtin_method_list(TYPE, &methods);
                 for (const StringName& name : methods)
                 {
-                    const int argument_count = Variant::get_builtin_method_argument_count(TYPE, name);
-                    const bool has_return_value = Variant::has_builtin_method_return_value(TYPE, name);
-                    const Variant::Type return_type = Variant::get_builtin_method_return_type(TYPE, name);
+                    const int argument_count = VariantExt::get_builtin_method_argument_count(TYPE, name);
+                    const bool has_return_value = VariantExt::has_builtin_method_return_value(TYPE, name);
+                    const Variant::Type return_type = VariantExt::get_builtin_method_return_type(TYPE, name);
                     const String member_name = internal::NamingUtil::get_member_name(name);
 
 #if JSB_FAST_REFLECTION
-                    if (!Variant::is_builtin_method_vararg(TYPE, name))
+                    if (!VariantExt::is_builtin_method_vararg(TYPE, name))
                     {
                         //TODO hardcoded branches for fast method reflection wrapper
                         if (has_return_value)
@@ -700,8 +721,8 @@ namespace jsb
                                 if (argument_count == 0)
                                 {
                                     // func: float ();
-                                    void* func_ptr = (void*) Variant::get_ptr_builtin_method(TYPE, name);
-                                    if (Variant::is_builtin_method_static(TYPE, name))
+                                    void* func_ptr = (void*) VariantExt::get_ptr_builtin_method(TYPE, name);
+                                    if (VariantExt::is_builtin_method_static(TYPE, name))
                                     {
                                         class_builder.Static().Method(member_name,
                                             ReflectBuiltinMethodPointerCall<T, real_t>::template call<false>, func_ptr);
@@ -715,12 +736,12 @@ namespace jsb
                                 }
                                 if (argument_count == 1)
                                 {
-                                    const Variant::Type arg_type_0 = Variant::get_builtin_method_argument_type(TYPE, name, 0);
+                                    const Variant::Type arg_type_0 = VariantExt::get_builtin_method_argument_type(TYPE, name, 0);
                                     if (arg_type_0 == Variant::FLOAT)
                                     {
                                         // func: float (float);
-                                        void* func_ptr = (void*) Variant::get_ptr_builtin_method(TYPE, name);
-                                        if (Variant::is_builtin_method_static(TYPE, name))
+                                        void* func_ptr = (void*) VariantExt::get_ptr_builtin_method(TYPE, name);
+                                        if (VariantExt::is_builtin_method_static(TYPE, name))
                                         {
                                             class_builder.Static().Method(member_name,
                                                 ReflectBuiltinMethodPointerCall<T, real_t, real_t>::template call<false>, func_ptr);
@@ -739,8 +760,8 @@ namespace jsb
                                 if (argument_count == 0)
                                 {
                                     // func: int32 ();
-                                    void* func_ptr = (void*) Variant::get_ptr_builtin_method(TYPE, name);
-                                    if (Variant::is_builtin_method_static(TYPE, name))
+                                    void* func_ptr = (void*) VariantExt::get_ptr_builtin_method(TYPE, name);
+                                    if (VariantExt::is_builtin_method_static(TYPE, name))
                                     {
                                         class_builder.Static().Method(member_name,
                                             ReflectBuiltinMethodPointerCall<T, int32_t>::template call<false>, func_ptr);
@@ -758,8 +779,8 @@ namespace jsb
                                 if (argument_count == 0)
                                 {
                                     // func: bool ();
-                                    void* func_ptr = (void*) Variant::get_ptr_builtin_method(TYPE, name);
-                                    if (Variant::is_builtin_method_static(TYPE, name))
+                                    void* func_ptr = (void*) VariantExt::get_ptr_builtin_method(TYPE, name);
+                                    if (VariantExt::is_builtin_method_static(TYPE, name))
                                     {
                                         class_builder.Static().Method(member_name,
                                             ReflectBuiltinMethodPointerCall<T, bool>::template call<false>, func_ptr);
@@ -778,8 +799,8 @@ namespace jsb
                             if (argument_count == 0)
                             {
                                 // func: void ();
-                                void* func_ptr = (void*) Variant::get_ptr_builtin_method(TYPE, name);
-                                if (Variant::is_builtin_method_static(TYPE, name))
+                                void* func_ptr = (void*) VariantExt::get_ptr_builtin_method(TYPE, name);
+                                if (VariantExt::is_builtin_method_static(TYPE, name))
                                 {
                                     class_builder.Static().Method(member_name,
                                         ReflectBuiltinMethodPointerCall<T, void>::template call<false>, func_ptr);
@@ -793,12 +814,12 @@ namespace jsb
                             }
                             if (argument_count == 1)
                             {
-                                const Variant::Type arg_type_0 = Variant::get_builtin_method_argument_type(TYPE, name, 0);
+                                const Variant::Type arg_type_0 = VariantExt::get_builtin_method_argument_type(TYPE, name, 0);
                                 if (arg_type_0 == Variant::FLOAT)
                                 {
                                     // func: void (float);
-                                    void* func_ptr = (void*) Variant::get_ptr_builtin_method(TYPE, name);
-                                    if (Variant::is_builtin_method_static(TYPE, name))
+                                    void* func_ptr = (void*) VariantExt::get_ptr_builtin_method(TYPE, name);
+                                    if (VariantExt::is_builtin_method_static(TYPE, name))
                                     {
                                         class_builder.Static().Method(member_name,
                                             ReflectBuiltinMethodPointerCall<T, void, real_t>::template call<false>, func_ptr);
@@ -820,25 +841,21 @@ namespace jsb
                     GetVariantInfoCollection(p_env.env).methods.append({});
                     internal::FBuiltinMethodInfo& method_info = GetVariantInfoCollection(p_env.env).methods.write[collection_index];
                     method_info.set_debug_name(member_name);
-                    method_info.builtin_func = Variant::get_validated_builtin_method(TYPE, name);
+                    method_info.builtin_func = VariantExt::get_validated_builtin_method(TYPE, name);
                     method_info.return_type = return_type;
-                    method_info.default_arguments = Variant::get_builtin_method_default_arguments(TYPE, name);
-#if GODOT_4_5_OR_NEWER
-                    method_info.argument_types.resize_initialized(argument_count);
-#else
+                    method_info.default_arguments = VariantExt::get_builtin_method_default_arguments(TYPE, name);
                     method_info.argument_types.resize_zeroed(argument_count);
-#endif
-                    method_info.is_vararg = Variant::is_builtin_method_vararg(TYPE, name);
+                    method_info.is_vararg = VariantExt::is_builtin_method_vararg(TYPE, name);
                     for (int argument_index = 0; argument_index < argument_count; ++argument_index)
                     {
-                        const Variant::Type type = Variant::get_builtin_method_argument_type(TYPE, name, argument_index);
+                        const Variant::Type type = VariantExt::get_builtin_method_argument_type(TYPE, name, argument_index);
                         method_info.argument_types.write[argument_index] = type;
                     }
 
                     // function wrapper
                     if (has_return_value)
                     {
-                        if (Variant::is_builtin_method_static(TYPE, name))
+                        if (VariantExt::is_builtin_method_static(TYPE, name))
                         {
                             class_builder.Static().Method(member_name, _static_method<true>, collection_index);
                         }
@@ -849,7 +866,7 @@ namespace jsb
                     }
                     else
                     {
-                        if (Variant::is_builtin_method_static(TYPE, name))
+                        if (VariantExt::is_builtin_method_static(TYPE, name))
                         {
                             class_builder.Static().Method(member_name, _static_method<false>, collection_index);
                         }
@@ -872,17 +889,17 @@ namespace jsb
             HashSet<StringName> enum_constants;
             {
                 List<StringName> enums;
-                Variant::get_enums_for_type(TYPE, &enums);
+                VariantExt::get_enums_for_type(TYPE, &enums);
                 for (const StringName& enum_name : enums)
                 {
                     String exposed_enum_name = internal::NamingUtil::get_enum_name(enum_name);
                     auto enum_decl = class_builder.Static().Enum(exposed_enum_name);
                     List<StringName> enumerations;
-                    Variant::get_enumerations_for_enum(TYPE, enum_name, &enumerations);
+                    VariantExt::get_enumerations_for_enum(TYPE, enum_name, &enumerations);
                     for (const StringName& enumeration : enumerations)
                     {
                         bool r_valid;
-                        const int enum_value = Variant::get_enum_value(TYPE, enum_name, enumeration, &r_valid);
+                        const int enum_value = VariantExt::get_enum_value(TYPE, enum_name, enumeration, &r_valid);
                         jsb_check(r_valid);
                         enum_decl.Value(internal::NamingUtil::get_enum_value_name(enumeration), enum_value);
                         enum_constants.insert(enumeration);
@@ -893,7 +910,7 @@ namespace jsb
             // constants
             {
                 List<StringName> constants;
-                Variant::get_constants_for_type(TYPE, &constants);
+                VariantExt::get_constants_for_type(TYPE, &constants);
                 for (const StringName& constant : constants)
                 {
                     // exclude all enum constants
@@ -944,13 +961,13 @@ namespace jsb
             // methods
             {
                 List<StringName> methods;
-                Variant::get_builtin_method_list(TYPE, &methods);
+                VariantExt::get_builtin_method_list(TYPE, &methods);
 
                 for (const StringName& name : methods)
                 {
-                    const int argument_count = Variant::get_builtin_method_argument_count(TYPE, name);
-                    const bool has_return_value = Variant::has_builtin_method_return_value(TYPE, name);
-                    const Variant::Type return_type = Variant::get_builtin_method_return_type(TYPE, name);
+                    const int argument_count = VariantExt::get_builtin_method_argument_count(TYPE, name);
+                    const bool has_return_value = VariantExt::has_builtin_method_return_value(TYPE, name);
+                    const Variant::Type return_type = VariantExt::get_builtin_method_return_type(TYPE, name);
                     String member_name = internal::NamingUtil::get_member_name(name);
 
                     if (member_name == "length")
@@ -965,25 +982,21 @@ namespace jsb
                     GetVariantInfoCollection(p_env.env).methods.append({});
                     internal::FBuiltinMethodInfo& method_info = GetVariantInfoCollection(p_env.env).methods.write[collection_index];
                     method_info.set_debug_name(member_name);
-                    method_info.builtin_func = Variant::get_validated_builtin_method(TYPE, name);
+                    method_info.builtin_func = VariantExt::get_validated_builtin_method(TYPE, name);
                     method_info.return_type = return_type;
-                    method_info.default_arguments = Variant::get_builtin_method_default_arguments(TYPE, name);
-#if GODOT_4_5_OR_NEWER
-                    method_info.argument_types.resize_initialized(argument_count);
-#else
+                    method_info.default_arguments = VariantExt::get_builtin_method_default_arguments(TYPE, name);
                     method_info.argument_types.resize_zeroed(argument_count);
-#endif
-                    method_info.is_vararg = Variant::is_builtin_method_vararg(TYPE, name);
+                    method_info.is_vararg = VariantExt::is_builtin_method_vararg(TYPE, name);
                     for (int argument_index = 0; argument_index < argument_count; ++argument_index)
                     {
-                        const Variant::Type type = Variant::get_builtin_method_argument_type(TYPE, name, argument_index);
+                        const Variant::Type type = VariantExt::get_builtin_method_argument_type(TYPE, name, argument_index);
                         method_info.argument_types.write[argument_index] = type;
                     }
 
                     // function wrapper
                     if (has_return_value)
                     {
-                        if (Variant::is_builtin_method_static(TYPE, name))
+                        if (VariantExt::is_builtin_method_static(TYPE, name))
                         {
                             static_builder.Method(member_name, _static_method<true>, collection_index);
                         }
@@ -992,7 +1005,7 @@ namespace jsb
                             static_builder.Method(member_name, _utility_method<TYPE, true>, collection_index);
                         }
                     }
-                    else if (Variant::is_builtin_method_static(TYPE, name))
+                    else if (VariantExt::is_builtin_method_static(TYPE, name))
                     {
                         static_builder.Method(member_name, _static_method<false>, collection_index);
                     }
@@ -1009,17 +1022,17 @@ namespace jsb
              HashSet<StringName> enum_constants;
              {
                  List<StringName> enums;
-                 Variant::get_enums_for_type(TYPE, &enums);
+                 VariantExt::get_enums_for_type(TYPE, &enums);
                  for (const StringName& enum_name : enums)
                  {
                      String exposed_enum_name = internal::NamingUtil::get_enum_name(enum_name);
                      auto enum_decl = static_builder.Enum(exposed_enum_name);
                      List<StringName> enumerations;
-                     Variant::get_enumerations_for_enum(TYPE, enum_name, &enumerations);
+                     VariantExt::get_enumerations_for_enum(TYPE, enum_name, &enumerations);
                      for (const StringName& enumeration : enumerations)
                      {
                          bool r_valid;
-                         const int enum_value = Variant::get_enum_value(TYPE, enum_name, enumeration, &r_valid);
+                         const int enum_value = VariantExt::get_enum_value(TYPE, enum_name, enumeration, &r_valid);
                          jsb_check(r_valid);
                          enum_decl.Value(internal::NamingUtil::get_enum_value_name(enumeration), enum_value);
                          enum_constants.insert(enumeration);
@@ -1030,7 +1043,7 @@ namespace jsb
              // constants
              {
                  List<StringName> constants;
-                 Variant::get_constants_for_type(TYPE, &constants);
+                 VariantExt::get_constants_for_type(TYPE, &constants);
                  for (const StringName& constant : constants)
                  {
                      // exclude all enum constants
@@ -1054,11 +1067,11 @@ namespace jsb
     {
 #pragma push_macro("DEF")
 #   undef   DEF
-#   define  DEF(TypeName) p_env->add_class_register(GetTypeInfo<TypeName>::VARIANT_TYPE, &VariantBind<TypeName>::reflect_bind);
+#   define  DEF(TypeName) p_env->add_class_register(static_cast<Variant::Type>(GetTypeInfo<TypeName>::VARIANT_TYPE), &VariantBind<TypeName>::reflect_bind);
 #   include "jsb_primitive_types.def.h"
 #pragma pop_macro("DEF")
 
-        p_env->add_class_register(GetTypeInfo<String>::VARIANT_TYPE, &VariantBind<String>::reflect_bind_utilities);
+        p_env->add_class_register(static_cast<Variant::Type>(GetTypeInfo<String>::VARIANT_TYPE), &VariantBind<String>::reflect_bind_utilities);
     }
 }
 

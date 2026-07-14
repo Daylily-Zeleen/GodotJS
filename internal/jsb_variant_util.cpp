@@ -1,7 +1,6 @@
 #include "jsb_variant_util.h"
-#include "core/variant/array.h"
-#include "core/variant/container_type_validate.h"
-#include "core/variant/dictionary.h"
+#include <godot_cpp/variant/array.hpp>
+
 
 namespace jsb::internal
 {
@@ -32,7 +31,8 @@ namespace jsb::internal
             {
                 Dictionary original = p_variant;
                 Dictionary dict_clone;
-                dict_clone.set_typed(original.get_key_type(), original.get_value_type());
+                dict_clone.set_typed(original.get_typed_key_builtin(), original.get_typed_key_class_name(), original.get_typed_key_script(),
+                        original.get_typed_value_builtin(), original.get_typed_value_class_name(), original.get_typed_value_script());
 
                 if (p_recursion_count > MAX_RECURSION)
                 {
@@ -43,24 +43,16 @@ namespace jsb::internal
 
                 p_recursion_count++;
 
-#if GODOT_4_5_OR_NEWER
-                for (const KeyValue<Variant, Variant>& entry : original)
+                // GDExtension: use Dictionary::keys() instead of get_key_list()
                 {
-                    dict_clone[structured_clone(entry.key, p_clone_map, r_valid, p_recursion_count)] =
-                            structured_clone(entry.value, p_clone_map, r_valid, p_recursion_count);
+                    Array keys = original.keys();
+                    for (int idx = 0; idx < keys.size(); idx++)
+                    {
+                        const Variant& key = keys[idx];
+                        dict_clone[structured_clone(key, p_clone_map, r_valid, p_recursion_count)] =
+                            structured_clone(original[key], p_clone_map, r_valid, p_recursion_count);
+                    }
                 }
-#else
-                List<Variant> keys;
-                original.get_key_list(&keys);
-
-                List<Variant>::Element *E = keys.front();
-                for (; E; E = E->next())
-                {
-                    Variant key = E->get();
-                    dict_clone[structured_clone(key, p_clone_map, r_valid, p_recursion_count)] =
-                        structured_clone(original[key], p_clone_map, r_valid, p_recursion_count);
-                }
-#endif
 
                 clone = dict_clone;
                 break;
@@ -69,7 +61,7 @@ namespace jsb::internal
             {
                 Array original = p_variant;
                 Array arr_clone;
-                arr_clone.set_typed(original.get_element_type());
+                arr_clone.set_typed(original.get_typed_builtin(), original.get_typed_class_name(), original.get_typed_script());
 
                 if (p_recursion_count > MAX_RECURSION)
                 {
@@ -92,34 +84,34 @@ namespace jsb::internal
                 break;
             }
             case Variant::Type::PACKED_BYTE_ARRAY:
-                clone = p_variant.operator Vector<uint8_t>().duplicate();
+                clone = p_variant.operator PackedByteArray().duplicate();
                 break;
             case Variant::Type::PACKED_INT32_ARRAY:
-                clone = p_variant.operator Vector<int32_t>().duplicate();
+                clone = p_variant.operator PackedInt32Array().duplicate();
                 break;
             case Variant::Type::PACKED_INT64_ARRAY:
-                clone = p_variant.operator Vector<int64_t>().duplicate();
+                clone = p_variant.operator PackedInt64Array().duplicate();
                 break;
             case Variant::Type::PACKED_FLOAT32_ARRAY:
-                clone = p_variant.operator Vector<float>().duplicate();
+                clone = p_variant.operator PackedFloat32Array().duplicate();
                 break;
             case Variant::Type::PACKED_FLOAT64_ARRAY:
-                clone = p_variant.operator Vector<double>().duplicate();
+                clone = p_variant.operator PackedFloat64Array().duplicate();
                 break;
             case Variant::Type::PACKED_STRING_ARRAY:
-                clone = p_variant.operator Vector<String>().duplicate();
+                clone = p_variant.operator PackedStringArray().duplicate();
                 break;
             case Variant::Type::PACKED_VECTOR2_ARRAY:
-                clone = p_variant.operator Vector<Vector2>().duplicate();
+                clone = p_variant.operator PackedVector2Array().duplicate();
                 break;
             case Variant::Type::PACKED_VECTOR3_ARRAY:
-                clone = p_variant.operator Vector<Vector3>().duplicate();
+                clone = p_variant.operator PackedVector3Array().duplicate();
                 break;
             case Variant::Type::PACKED_COLOR_ARRAY:
-                clone = p_variant.operator Vector<Color>().duplicate();
+                clone = p_variant.operator PackedColorArray().duplicate();
                 break;
             case Variant::Type::PACKED_VECTOR4_ARRAY:
-                clone = p_variant.operator Vector<Vector4>().duplicate();
+                clone = p_variant.operator PackedVector4Array().duplicate();
                 break;
             default:
                 clone = p_variant;

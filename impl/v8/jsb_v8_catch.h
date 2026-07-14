@@ -1,8 +1,8 @@
 ﻿#ifndef GODOTJS_V8_CATCH_H
 #define GODOTJS_V8_CATCH_H
 
-#include "core/string/ustring.h"
 #include "jsb_v8_pch.h"
+#include <godot_cpp/variant/string.hpp>
 
 namespace jsb::impl
 {
@@ -24,7 +24,7 @@ namespace jsb::impl
 
         bool has_caught() const { return try_catch_.HasCaught(); }
 
-        void get_message(String* r_message, String* r_stacktrace = nullptr) const
+        void get_message(godot::String* r_message, godot::String* r_stacktrace = nullptr) const
         {
             const v8::Local<v8::Message> message = try_catch_.Message();
             if (message.IsEmpty())

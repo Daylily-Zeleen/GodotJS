@@ -4,12 +4,22 @@
 #include "../compat/jsb_compat.h"
 #include "jsb_macros.h"
 
-#if GODOT_4_7_OR_NEWER
-#define next_power_of_2 Math::next_power_of_2
-#endif
-
 namespace jsb::internal
 {
+    // Simple next power of 2 helper (replaces Math::next_power_of_2 which is not in godot-cpp)
+    template<typename T>
+    static T next_power_of_2(T v)
+    {
+        v--;
+        v |= v >> 1;
+        v |= v >> 2;
+        v |= v >> 4;
+        v |= v >> 8;
+        v |= v >> 16;
+        v++;
+        return v;
+    }
+
     struct AnsiAllocator
     {
         enum { kInitialElementNum = 8 };

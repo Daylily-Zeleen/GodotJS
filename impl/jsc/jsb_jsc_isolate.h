@@ -6,8 +6,6 @@
 #include "jsb_jsc_handle_scope.h"
 #include "jsb_jsc_array_buffer.h"
 #include "jsb_jsc_promise_reject.h"
-#include "core/os/mutex.h"
-#include "core/templates/vector.h"
 
 namespace jsb::impl
 {
@@ -345,7 +343,7 @@ namespace v8
 
         jsb::internal::SArray<JSValueRef, jsb::impl::CapturedValueID> captured_values_;
         RingBuffer<jsb::impl::CapturedValueID> pending_delete_;
-        Mutex pending_finalize_mutex_;
+        mutable std::mutex pending_finalize_mutex_;
         Vector<jsb::impl::InternalData*> pending_finalize_;
 
         uint16_t stack_pos_;

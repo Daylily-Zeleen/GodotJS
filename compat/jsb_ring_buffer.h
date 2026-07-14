@@ -31,13 +31,11 @@
 #ifndef GODOTJS_RING_BUFFER_H
 #define GODOTJS_RING_BUFFER_H
 
-#if JSB_GDEXTENSION
-
 #include <godot_cpp/templates/vector.hpp>
 
 template <typename T>
 class RingBuffer {
-    Vector<T> data;
+    godot::Vector<T> data;
     int read_pos = 0;
     int write_pos = 0;
     int size_mask;
@@ -57,13 +55,13 @@ public:
 
     int read(T *p_buf, int p_size, bool p_advance = true) {
         int left = data_left();
-        p_size = MIN(left, p_size);
+        p_size = godot::MIN(left, p_size);
         int pos = read_pos;
         int to_read = p_size;
         int dst = 0;
         while (to_read) {
             int end = pos + to_read;
-            end = MIN(end, size());
+            end = godot::MIN(end, size());
             int total = end - pos;
             const T *read = data.ptr();
             for (int i = 0; i < total; i++) {
@@ -86,14 +84,14 @@ public:
                 return 0;
             }
         }
-        p_size = MIN(left, p_size);
+        p_size = godot::MIN(left, p_size);
         int pos = read_pos;
         inc(pos, p_offset);
         int to_read = p_size;
         int dst = 0;
         while (to_read) {
             int end = pos + to_read;
-            end = MIN(end, size());
+            end = godot::MIN(end, size());
             int total = end - pos;
             for (int i = 0; i < total; i++) {
                 p_buf[dst++] = data[pos + i];
@@ -112,13 +110,13 @@ public:
                 return 0;
             }
         }
-        p_max_size = MIN(left, p_max_size);
+        p_max_size = godot::MIN(left, p_max_size);
         int pos = read_pos;
         inc(pos, p_offset);
         int to_read = p_max_size;
         while (to_read) {
             int end = pos + to_read;
-            end = MIN(end, size());
+            end = godot::MIN(end, size());
             int total = end - pos;
             for (int i = 0; i < total; i++) {
                 if (data[pos + i] == t) {
@@ -132,33 +130,33 @@ public:
     }
 
     inline int advance_read(int p_n) {
-        p_n = MIN(p_n, data_left());
+        p_n = godot::MIN(p_n, data_left());
         inc(read_pos, p_n);
         return p_n;
     }
 
     inline int decrease_write(int p_n) {
-        p_n = MIN(p_n, data_left());
+        p_n = godot::MIN(p_n, data_left());
         inc(write_pos, size_mask + 1 - p_n);
         return p_n;
     }
 
-    Error write(const T &p_v) {
-        ERR_FAIL_COND_V(space_left() < 1, FAILED);
+    godot::Error write(const T &p_v) {
+        ERR_FAIL_COND_V(space_left() < 1, godot::FAILED);
         data.write[inc(write_pos, 1)] = p_v;
-        return OK;
+        return godot::OK;
     }
 
     int write(const T *p_buf, int p_size) {
         int left = space_left();
-        p_size = MIN(left, p_size);
+        p_size = godot::MIN(left, p_size);
 
         int pos = write_pos;
         int to_write = p_size;
         int src = 0;
         while (to_write) {
             int end = pos + to_write;
-            end = MIN(end, size());
+            end = godot::MIN(end, size());
             int total = end - pos;
 
             for (int i = 0; i < total; i++) {
@@ -218,10 +216,5 @@ public:
     }
     ~RingBuffer() {}
 };
-#else
-
-#include "core/templates/ring_buffer.h"
-
-#endif // JSB_GDEXTENSION
 
 #endif // GODOTJS_RING_BUFFER_H

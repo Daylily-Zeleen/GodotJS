@@ -24,7 +24,7 @@ namespace jsb
                 jsb_throw(isolate, "bad parameter");
                 return;
             }
-            info.GetReturnValue().Set(impl::Helper::to_array_buffer(isolate, var));
+            info.GetReturnValue().Set(impl::Helper::to_array_buffer(isolate, var.operator PackedByteArray()));
         }
 
         String _describe_export_name(
@@ -70,7 +70,7 @@ namespace jsb
             case 2:
                 {
                     Variant obj_var;
-                    if (!TypeConvert::js_to_gd_var(isolate, context, info[0], Variant::OBJECT, obj_var) || obj_var.is_null())
+                    if (!TypeConvert::js_to_gd_var(isolate, context, info[0], Variant::OBJECT, obj_var) || obj_var.get_type() == Variant::NIL)
                     {
                         jsb_throw(isolate, "bad object");
                         return;

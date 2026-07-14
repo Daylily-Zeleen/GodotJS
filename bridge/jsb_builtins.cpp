@@ -28,7 +28,7 @@ namespace jsb
             return;
         }
         const v8::Local<v8::Array> deps_val = info[1].As<v8::Array>();
-        Vector<String> deps;
+        PackedStringArray deps;
         for (uint32_t index = 0, len = deps_val->Length(); index < len; ++index)
         {
             v8::Local<v8::Value> item;

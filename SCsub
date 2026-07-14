@@ -91,7 +91,7 @@ lws_prebuilt_libs = LibraryDescriptor("lws", \
 ])
 quickjs_src_descs = ThirdPartyDescriptor("quickjs", \
 [
-    ThirdPartyDetails("quickjs-ng", ["dtoa.c", "libregexp.c", "libunicode.c", "quickjs.c"]),
+    ThirdPartyDetails("third/quickjs-ng", ["dtoa.c", "libregexp.c", "libunicode.c", "quickjs.c"]),
     ThirdPartyDetails("quickjs",    ["cutils.c", "libbf.c", "libregexp.c", "libunicode.c", "quickjs.c"]),
 ])
 
@@ -174,7 +174,7 @@ def download_dependency(name, version, target_dir):
     except Exception as e:
         check(False, f"Failed to download or extract {name}: {str(e)}")
 
-use_quickjs = "quickjs" if env["use_quickjs"] else ("quickjs-ng" if env["use_quickjs_ng"] else None)
+use_quickjs = "quickjs" if env["use_quickjs"] else ("third/quickjs-ng" if env["use_quickjs_ng"] else None)
 jsc_support = "jsc" if env["use_jsc"] and use_quickjs is None else None
 quickjs_support = get_thirdparty_support(quickjs_src_descs, use_quickjs)
 
@@ -189,7 +189,7 @@ lws_support = validate_library_support(lws_prebuilt_libs) if v8_support is not N
 jsb_defines = [
     CompileDefines("JSB_USE_TYPESCRIPT", 1 if env["use_typescript"] else 0),
     CompileDefines("JSB_WITH_QUICKJS", 1 if quickjs_support is not None else 0),
-    CompileDefines("JSB_PREFER_QUICKJS_NG", 1 if quickjs_support is not None and quickjs_support[1].path == "quickjs-ng" else 0, [
+    CompileDefines("JSB_PREFER_QUICKJS_NG", 1 if quickjs_support is not None and quickjs_support[1].path == "third/quickjs-ng" else 0, [
         "(Only effective when `JSB_WITH_QUICKJS` is enabled)",
         "Use quickjs-ng instead of quickjs",
     ]),
@@ -544,7 +544,7 @@ if quickjs_support is not None:
     env_quickjs.add_source_files(quickjs_obj, [f"{quickjs_dir}/{filename}" for filename in quickjs_support[1].sources])
     add_natvis("impl/quickjs/jsb.quickjs.natvis")
 
-    if env.dev_build and quickjs_dir != "quickjs-ng":
+    if env.dev_build and quickjs_dir != "third/quickjs-ng":
         env_quickjs.Append(CFLAGS=["-DDUMP_LEAKS=1"])
 
     if env.msvc:
@@ -556,7 +556,7 @@ if quickjs_support is not None:
         env_quickjs.Append(CCFLAGS=["/fp:precise"])
 
         # applying quickjs-ng specific flags
-        if quickjs_dir == "quickjs-ng":
+        if quickjs_dir == "third/quickjs-ng":
             # c11atomics is required for quickjs-ng
             env_quickjs.Append(CCFLAGS=["/experimental:c11atomics", "/std:c11"])
             # remove std:c++ flag due to conflict with std:c11
@@ -614,15 +614,21 @@ generate_code([\
     ])
 
 # common parts
-env_jsb.add_source_files(module_obj, ["register_types.cpp", "jsb_project_preset.gen.cpp"])
+env_jsb.add_source_files(module_obj, ["register_types.cpp", "jsb_project_preset.gen.cpp", "utility_functions_ext.gen.cpp", "core_constants.gen.cpp"]) # 调整 "utility_functions_ext.gen.cpp", "core_constants.gen.cpp"
 env_jsb.add_source_files(module_obj, "internal/*.cpp")
 env_jsb.add_source_files(module_obj, "weaver/*.cpp")
 env_jsb.add_source_files(module_obj, "bridge/*.cpp")
+
+# api_tool module: core (runtime)
+env_jsb.add_source_files(module_obj, "api_tool/*.cpp")
+env_jsb.add_source_files(module_obj, "api_tool/core/*.cpp")
 
 # editor functionalities
 if env.editor_build:
     env_jsb.add_source_files(module_obj, "weaver-editor/*.cpp")
     SConscript("weaver-editor/templates/SCsub")
+    # api_tool module: editor-only (parser, generator, export plugin)
+    env_jsb.add_source_files(module_obj, "api_tool/editor/*.cpp")
 
 # natvis for non-impl specific types
 add_natvis(f"jsb.natvis")

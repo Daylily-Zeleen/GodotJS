@@ -11,7 +11,7 @@ namespace jsb::internal
         // a map of PackedScene, behaves like a weak ref
         HashMap<String, ObjectID> packed_scenes;
 
-        Mutex mutex;
+        mutable std::mutex mutex;
 
     public:
         Ref<PackedScene> get_packed_scene(const String &p_path, Error &r_error);

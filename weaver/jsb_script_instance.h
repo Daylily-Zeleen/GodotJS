@@ -1,12 +1,83 @@
 #ifndef GODOTJS_SCRIPT_INSTANCE_H
 #define GODOTJS_SCRIPT_INSTANCE_H
 
-#include "core/object/script_language.h"
+#include "jsb_script_language.h"
 #include "jsb_script.h"
 
-// An abstract base class for GodotJS script instance implementations
-class GodotJSScriptInstanceBase : public ScriptInstance
+#include <gdextension_interface.h>
+
+class PlaceholderScriptInstance;
+class GodotJSScriptInstanceBase;
+class GodotJSShadowScriptInstance;
+class GodotJSScriptInstance;
+
+class ScriptInstance {
+protected:
+    Object* owner_ = nullptr;
+    Ref<GodotJSScript> script_;
+    GDExtensionScriptInstancePtr extension_instance_ptr {nullptr};
+
+    ScriptInstance(const Ref<GodotJSScript> &p_script, Object* p_owner, GDExtensionScriptInstancePtr p_extension_instance_ptr);
+public:
+    const GDExtensionScriptInstancePtr get_extension_instance_ptr() const {return extension_instance_ptr;}
+public:
+    virtual ~ScriptInstance() = default;
+
+    virtual bool is_placeholder() const { return false; }
+    virtual bool is_shadow() const { return false;}
+
+    // Owner/script/language access
+    Object* get_owner() const { return owner_; }
+    Ref<GodotJSScript> get_script() const { return script_; }
+    ScriptLanguage* get_language() const { return script_.is_valid() ? GodotJSScriptLanguage::get_singleton() : nullptr; }
+
+public:
+    virtual void get_property_state(ScriptInstancePropertyState &p_state) const {}
+
+public:
+    static ScriptInstance* get_script_instance(Object* p_object);
+    static void set_script_instance(Object *p_object, ScriptInstance *p_instance);
+
+    template<typename ScriptInstanceTy>
+    static ScriptInstanceTy* get_script_instance(Object* p_object) {
+        ScriptInstance* si = get_script_instance(p_object);
+        if (si == nullptr) return nullptr;
+
+        if (si->is_placeholder()) {
+            if constexpr (std::is_same_v<ScriptInstanceTy, PlaceholderScriptInstance>) return si;
+            else return nullptr;
+        }
+
+        if constexpr (std::is_same_v<ScriptInstanceTy, GodotJSShadowScriptInstance>) {
+            if (!(GodotJSScriptInstanceBase*)si->is_shadow()) return nullptr;
+        }
+        if constexpr (std::is_same_v<ScriptInstanceTy, GodotJSShadowScriptInstance>) {
+            if ((GodotJSScriptInstanceBase*)si->is_shadow()) return nullptr;
+        }
+        return static_cast<ScriptInstanceTy*>(si);
+    }
+};
+
+
+#ifdef TOOLS_ENABLED
+class PlaceholderScriptInstance: public ScriptInstance
 {
+    Object* owner_ = nullptr;
+    Ref<GodotJSScript> script_;
+public:
+    PlaceholderScriptInstance(const Ref<GodotJSScript> &p_script, Object* p_owner);
+
+    virtual bool is_placeholder() const override { return true; }
+    void update(const TypedArray<Dictionary> &p_properties, const Dictionary &p_values);
+};
+#endif // TOOLS_ENABLED
+
+// An abstract base class for GodotJS script instance implementations
+class GodotJSScriptInstanceBase: public ScriptInstance
+{
+protected:
+    GDExtensionScriptInstancePtr extension_instance_ptr {nullptr};
+
 protected:
     struct ScriptProfilingInfo
     {
@@ -27,21 +98,43 @@ protected:
 protected:
     Object* owner_ = nullptr;
     Ref<GodotJSScript> script_;
+
 #if JSB_DEBUG
     ScriptProfilingInfo profiling_info_;
 #endif
 
+    GodotJSScriptInstanceBase(const Ref<GodotJSScript> &p_script, Object* p_owner);
 public:
-    virtual ~GodotJSScriptInstanceBase() override;
-    virtual bool is_shadow() const = 0;
+    virtual ~GodotJSScriptInstanceBase();
 
-#pragma region ScriptIntance Implementation
-    virtual Object* get_owner() override { return owner_; }
-    virtual Ref<Script> get_script() const override { return script_; }
-    virtual ScriptLanguage* get_language() override { return script_->get_language(); }
-#pragma endregion
+    // Property access
+    virtual bool set(const StringName& p_name, const Variant& p_value) = 0;
+    virtual bool get(const StringName& p_name, Variant& r_ret) const = 0;
+    virtual void get_property_list(LocalVector<GDExtensionPropertyInfo>* p_properties) const = 0;
+    virtual Variant::Type get_property_type(const StringName& p_name, bool* r_is_valid = nullptr) const = 0;
+    virtual void validate_property(PropertyInfo& p_property) const = 0;
+    virtual bool property_can_revert(const StringName& p_name) const { return false; }
+    virtual bool property_get_revert(const StringName& p_name, Variant& r_ret) const { return false; }
+    virtual void get_property_state(ScriptInstancePropertyState &p_state) const override;
+    // Method access
+    virtual void get_method_list(LocalVector<GDExtensionMethodInfo>* p_list, List<Variant> &r_default_value_caches) const = 0;
+    virtual bool has_method(const StringName& p_method) const = 0;
+	virtual int get_method_argument_count(const StringName &p_method, bool *r_is_valid = nullptr) const {return 0;} // TODO
+    virtual Variant callp(const StringName& p_method, const Variant** p_args, int p_argcount, GDExtensionCallError& r_error) = 0;
 
+    // Notifications
+    virtual void notification(int p_notification, bool p_reversed = false) {}
 
+    // TODO: 
+    virtual String to_string(bool *r_valid) { 
+		if (r_valid) {
+			*r_valid = false;
+		}
+		return String();
+	}
+
+    // RPC
+    virtual const Variant get_rpc_config() const { return Variant(); }
 };
 
 // A runtime placeholder for the script instances which instantiated by async resource loader request.
@@ -50,14 +143,12 @@ public:
 class GodotJSShadowScriptInstance : public GodotJSScriptInstanceBase
 {
 private:
-    friend class GodotJSScript;
-
     HashMap<StringName, Variant> state_;
 
 public:
     virtual bool is_shadow() const override { return true; }
 
-#pragma region ScriptIntance Implementation
+#pragma region GodotJSScriptInstanceBase Implementation
     virtual bool set(const StringName& p_name, const Variant& p_value) override
     {
         state_[p_name] = p_value;
@@ -74,31 +165,19 @@ public:
         return false;
     }
 
-    virtual void get_property_list(List<PropertyInfo>* p_properties) const override
-    {
-        script_->get_script_property_list(p_properties);
-    }
-
-    virtual Variant::Type get_property_type(const StringName& p_name, bool* r_is_valid = nullptr) const override
-    {
-        if (const jsb::ScriptPropertyInfo* ptr = script_->script_class_info_.properties.getptr(p_name))
-        {
-            if (r_is_valid) *r_is_valid = true;
-            return ptr->type;
-        }
-        return Variant::NIL;
-    }
+    virtual void get_property_list(LocalVector<GDExtensionPropertyInfo>* p_properties) const override;
+    virtual Variant::Type get_property_type(const StringName& p_name, bool* r_is_valid = nullptr) const override;
 
     virtual void validate_property(PropertyInfo& p_property) const override {}
     virtual bool property_can_revert(const StringName& p_name) const override { return false; }
     virtual bool property_get_revert(const StringName& p_name, Variant& r_ret) const override { return false; }
 
-    virtual void get_method_list(List<MethodInfo>* p_list) const override { return script_->get_script_method_list(p_list); }
-    virtual bool has_method(const StringName& p_method) const override { return script_->script_class_info_.methods.has(p_method); }
+    virtual void get_method_list(LocalVector<GDExtensionMethodInfo>* p_list, List<Variant> &r_default_value_caches) const override;
+    virtual bool has_method(const StringName& p_method) const override;
 
-    virtual Variant callp(const StringName& p_method, const Variant** p_args, int p_argcount, Callable::CallError& r_error) override
+    virtual Variant callp(const StringName& p_method, const Variant** p_args, int p_argcount, GDExtensionCallError& r_error) override
     {
-        r_error.error = Callable::CallError::CALL_ERROR_INVALID_METHOD;
+        r_error.error = GDEXTENSION_CALL_ERROR_INVALID_METHOD;
         return {};
     }
 
@@ -106,18 +185,16 @@ public:
     {
     }
 
-    virtual const Variant get_rpc_config() const override { return script_->get_rpc_config(); }
+    virtual const Variant get_rpc_config() const override;
 #pragma endregion
-
-private:
-    GodotJSShadowScriptInstance() = default;
+public:
+    GodotJSShadowScriptInstance(const Ref<GodotJSScript> &p_script, Object *p_owner):
+        GodotJSScriptInstanceBase(p_script, p_owner) {}
 };
 
 class GodotJSScriptInstance : public GodotJSScriptInstanceBase
 {
 private:
-    friend class GodotJSScript;
-
     std::shared_ptr<jsb::Environment> env_;
 
     // script class handle
@@ -126,18 +203,15 @@ private:
     // object handle (the JS object binding id)
     jsb::NativeObjectID object_id_;
 
-#if GODOT_4_6_OR_NEWER
-    HashMap<Variant, Variant> property_cache_;
-#else
-    HashMap<Variant, Variant, VariantHasher, StringLikeVariantComparator> property_cache_;
-#endif
+    HashMap<StringName, Variant> property_cache_;
 
 private:
     jsb::ScriptClassInfoPtr get_script_class() const;
 
-    public:
-        virtual bool is_shadow() const override { return false; }
-        Thread::ID get_env_thread_id() const { return env_ ? env_->get_thread_id() : Thread::UNASSIGNED_ID; }
+    friend class GodotJSScript;
+
+public:
+    jsb::compat::ThreadID get_env_thread_id() const { return env_ ? env_->get_thread_id() : jsb::compat::UNASSIGNED_THREAD_ID; }
 
     // for Environment lifecycle control (avoid object leaks), detach all JS object bindings
     // void _detach();
@@ -145,28 +219,30 @@ private:
     void postbind();
     void cache_property(const StringName& name, const Variant& value);
 
-#pragma region ScriptIntance Implementation
+#pragma region GodotJSScriptInstanceBase Implementation
 
     virtual bool set(const StringName& p_name, const Variant& p_value) override;
     virtual bool get(const StringName& p_name, Variant& r_ret) const override;
-    virtual void get_property_list(List<PropertyInfo>* p_properties) const override;
+    virtual void get_property_list(LocalVector<GDExtensionPropertyInfo>* p_properties) const override;
     virtual Variant::Type get_property_type(const StringName& p_name, bool* r_is_valid = nullptr) const override;
     virtual void validate_property(PropertyInfo& p_property) const override;
 
     virtual bool property_can_revert(const StringName& p_name) const override;
     virtual bool property_get_revert(const StringName& p_name, Variant& r_ret) const override;
 
-    virtual void get_method_list(List<MethodInfo>* p_list) const override;
+    virtual void get_method_list(LocalVector<GDExtensionMethodInfo>* p_list, List<Variant> &r_default_value_caches) const override;
     virtual bool has_method(const StringName& p_method) const override;
-    virtual Variant callp(const StringName& p_method, const Variant** p_args, int p_argcount, Callable::CallError& r_error) override;
+    virtual Variant callp(const StringName& p_method, const Variant** p_args, int p_argcount, GDExtensionCallError& r_error) override;
 
     virtual void notification(int p_notification, bool p_reversed = false) override;
 
     virtual const Variant get_rpc_config() const override;
 #pragma endregion
 
-    private:
-        GodotJSScriptInstance() {}
-    };
-
+public:
+    GodotJSScriptInstance(const Ref<GodotJSScript> &p_script, Object *p_owner, jsb::JSEnvironment &p_env, const jsb::ScriptClassID & p_class_id):
+        GodotJSScriptInstanceBase(p_script, p_owner),
+        env_(p_env),
+        class_id_(p_class_id){}
+};
 #endif

@@ -1166,15 +1166,9 @@ declare module "godot" {
         function get_scene_nodes(scene_path: string): GDictionary<Record<string, TypeDescriptor>>;
     }
 
-    /**
-     * Editor only (internal)
-     */
-    class GodotJSEditorProgress extends Object {
-        init(name: string, description: string, total_steps: number): void;
-        set_state_name(name: string): void;
-        set_current(value: number): void;
-        step(): void;
-        finish(): void;
+    class ClassDB extends Object {
+        static class_call_static(clazz: string, method: string, ...args): Variant;
+        static class_exists(clazz: string): bool;
     }
 }
 

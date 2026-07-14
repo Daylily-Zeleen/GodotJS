@@ -8,16 +8,10 @@
 #include "jsb_ref.h"
 #include "jsb_type_convert.h"
 
-#include "core/string/ustring.h"
-
-#include "modules/GodotJS/internal/jsb_typealias.h"
-
-#include <urlmon.h>
-
-#define DEF_SNAME_GETTER(name) \
-	static const StringName &name() { \
+#define DEF_SNAME_GETTER(name)                  \
+	static const StringName &name() {           \
 		static const StringName _name{ #name }; \
-		return _name; \
+		return _name;                           \
 	}
 
 class Names {
@@ -39,13 +33,14 @@ public:
 #define JSB_SHADOW_REALM_LOG(Severity, Format, ...) JSB_LOG_IMPL(ShadowRealm, Severity, Format, ##__VA_ARGS__)
 #define JSB_SHADOW_REALM_MODULE_NAME "godot.shadowRealm"
 
-#define MUTEX_LOCK_GUARD(lock) auto _guard_##__LINE__ = MutexLock(lock)
+#include <mutex>
+#define MUTEX_LOCK_GUARD(lock) std::lock_guard<std::mutex> _guard_##__LINE__(lock)
 
 namespace jsb {
 enum class FinalizationType : uint8_t;
 
 using ShadowRealmID = internal::Index32;
-using ShadowRealmLock = Mutex;
+using ShadowRealmLock = std::mutex;
 class Environment;
 class TransferableShadowRealm;
 
@@ -57,27 +52,28 @@ void _placeholder(const v8::FunctionCallbackInfo<v8::Value> &info) {}
 #pragma region CrossWrapper
 static inline v8::Local<v8::Value> wrap_cross_env_value(Environment *p_host_env, v8::Isolate *p_isolate, const v8::Local<v8::Value> &p_function);
 
-static v8::Local<v8::String> transfer_string(v8::Isolate *p_from_isolate, const v8::Local<v8::String> &p_from_str, v8::Isolate *p_to_isolate) {
+/** NOTE: 将在 p_to_isolate 的作用域下创建返回值 */
+static v8::Local<v8::String> _transfer_string(v8::Isolate *p_from_isolate, const v8::Local<v8::String> &p_from_str, v8::Isolate *p_to_isolate) {
 	const v8::Isolate::Scope isolate_scope1(p_from_isolate);
-	const v8::HandleScope handle_scope1(p_from_isolate);
 
 	v8::Local<v8::String> to_str;
-	if (p_from_str->Length() < 256) {
-		uint16_t buffer[257];
-		p_from_str->Write(p_from_isolate, buffer);
 
-		const v8::Isolate::Scope isolate_scope1(p_from_isolate);
-		v8::EscapableHandleScope handle_scope1(p_from_isolate);
-		to_str = v8::String::NewFromTwoByte(p_to_isolate, buffer).ToLocalChecked();
-		handle_scope1.Escape(to_str);
+	// QuickJS 没有UTF16相关的公开转换接口，统一使用 UTF8
+	const size_t max_utf8_length = p_from_str->Length() * 3 + 1; // QuickJS 又没有UTF8长度的获取结构，真尼玛拧巴
+	if (max_utf8_length <= 256) {
+		char buffer[257];
+		int len = p_from_str->WriteUtf8(p_from_isolate, buffer, 257);
+
+		const v8::Isolate::Scope isolate_scope1(p_to_isolate);
+		to_str = v8::String::NewFromUtf8(p_to_isolate, buffer, len).ToLocalChecked();
 	} else {
-		uint16_t *buffer = memnew_arr(uint16_t, p_from_str->Length() + 1);
-		p_from_str->Write(p_from_isolate, buffer);
+		const int buffer_len = max_utf8_length + 1;
+		char *buffer = memnew_arr(char, buffer_len);
+		memset(buffer, 0, buffer_len);
+		int len = p_from_str->WriteUtf8(p_from_isolate, buffer, buffer_len);
 
 		const v8::Isolate::Scope isolate_scope1(p_from_isolate);
-		v8::EscapableHandleScope handle_scope1(p_from_isolate);
-		to_str = v8::String::NewFromTwoByte(p_to_isolate, buffer).ToLocalChecked();
-		handle_scope1.Escape(to_str);
+		to_str = v8::String::NewFromUtf8(p_to_isolate, buffer, len).ToLocalChecked();
 
 		memdelete_arr(buffer);
 	}
@@ -86,59 +82,8 @@ static v8::Local<v8::String> transfer_string(v8::Isolate *p_from_isolate, const 
 
 class SymbolCrossUtils {
 private:
-	using SymbolGlobalHash = int; // v8::internal::Address *;
-	class SymbolGlobal : public v8::Persistent<v8::Symbol> {
-	public:
-		/**
-		 * Construct a Global from a Local.
-		 * When the Local is non-empty, a new storage cell is created
-		 * pointing to the same object, and no flags are set.
-		 */
-		jsb_force_inline SymbolGlobal(v8::Isolate *isolate, v8::Local<v8::Symbol> that) : v8::Persistent<v8::Symbol>(isolate, that) {
-			hash_ = that->GetIdentityHash(); //ptr();
-		}
-
-		// /**
-		//  * Move constructor.
-		//  */
-		// jsb_force_inline SymbolGlobal(SymbolGlobal &&other) : v8::Persistent<v8::Symbol>(std::move(other)) {
-		// 	other.Reset();
-		// 	handle_.addr = addr();
-
-		// 	SetWeak(&handle_, &SymbolCrossUtils::clear_cache, v8::WeakCallbackType::kParameter);
-		// }
-
-		jsb_force_inline SymbolGlobal(const SymbolGlobal &that) { //  : v8::Persistent<v8::Symbol>(that)
-			this->Reset();
-			if (that.IsEmpty()) {
-				return;
-			}
-			this->slot() = v8::api_internal::CopyGlobalReference(that.slot());
-
-			this->hash_ = that.hash_;
-			SetWeak(&hash_, &SymbolCrossUtils::clear_cache, v8::WeakCallbackType::kParameter);
-		}
-
-		// jsb_force_inline SymbolGlobal(SymbolGlobalHash p_addr) : hash_(p_addr) {}
-
-	public:
-		struct hasher {
-			jsb_force_inline size_t operator()(const SymbolGlobal &obj) const noexcept {
-				return (uintptr_t)obj.hash();
-			}
-		};
-		struct equaler {
-			jsb_force_inline bool operator()(const SymbolGlobal &lhs, const SymbolGlobal &rhs) const {
-				return lhs == rhs; // || ((lhs.IsEmpty() || rhs.IsEmpty()) && (lhs.hash() == rhs.hash()));
-			}
-		};
-
-		jsb_force_inline SymbolGlobalHash hash() const { return hash_; }
-		// jsb_force_inline SymbolGlobalHash addr() const { return hash_; }
-
-	private:
-		SymbolGlobalHash hash_;
-	};
+	using SymbolGlobal = TWeakRef<v8::Symbol>;
+	using SymbolGlobalHash = decltype(((SymbolGlobal *)nullptr)->hash()); // v8::internal::Address *;
 
 	class Container {
 		struct Pair {
@@ -195,7 +140,7 @@ private:
 			return false;
 		}
 
-		SymbolGlobal get_raw(v8::Isolate *p_isolate) const {
+		SymbolGlobal &get_raw(v8::Isolate *p_isolate) const {
 			jsb_check(has(p_isolate));
 			if (pair) {
 				return pair->symbol;
@@ -206,9 +151,9 @@ private:
 		v8::Local<v8::Symbol> get(v8::Isolate *p_isolate) const {
 			jsb_check(has(p_isolate));
 			if (pair) {
-				return pair->symbol.Get(p_isolate);
+				return pair->symbol.object_.Get(p_isolate);
 			}
-			return map->at(p_isolate).Get(p_isolate);
+			return map->at(p_isolate).object_.Get(p_isolate);
 		}
 
 		SymbolGlobalHash get_mapped_hash(v8::Isolate *p_isolate) const {
@@ -246,13 +191,16 @@ private:
 				r_empty = true;
 				return true;
 			} else if (map) {
-				const auto it = std::find_if(map->begin(), map->end(),
-						[p_hash](const std::pair<v8::Isolate *, SymbolGlobal> &p) { return p.second.hash() == p_hash; });
-				map->erase(it);
-				if (map->empty()) {
-					memdelete(map);
-					map = nullptr;
-					r_empty = true;
+				for (auto it = map->begin(); it != map->end(); ++it) {
+					if (it->second.hash() == p_hash) {
+						map->erase(it);
+						if (map->empty()) {
+							memdelete(map);
+							map = nullptr;
+							r_empty = true;
+						}
+						break;
+					}
 				}
 				return true;
 			}
@@ -260,20 +208,14 @@ private:
 		}
 	};
 
-	using CacheType = std::unordered_map<SymbolGlobal, Container, SymbolGlobal::hasher, SymbolGlobal::equaler>;
+	using CacheType = std::unordered_map<SymbolGlobalHash, Container>; // , SymbolGlobal::hasher, SymbolGlobal::equaler>;
 
 private:
 	static CacheType cache_;
 
 	static void clear_cache(const v8::WeakCallbackInfo<SymbolGlobalHash> &data) {
 		SymbolGlobalHash hash = *data.GetParameter();
-		CacheType::iterator to_remove = std::find_if(cache_.begin(), cache_.end(),
-				[=](const std::pair<SymbolGlobal, Container> &p) { return p.first.hash() == hash; });
-
-		if (to_remove == cache_.end()) {
-			return;
-		}
-		cache_.erase(to_remove);
+		cache_.erase(hash);
 	}
 
 public:
@@ -285,19 +227,19 @@ public:
 	static void clear_isolate(v8::Isolate *p_isolate) {
 		key_for_funcs.erase(p_isolate);
 
-		std::vector<SymbolGlobal> to_remove;
+		std::vector<SymbolGlobalHash> to_remove;
 		for (auto it = cache_.begin(); it != cache_.end(); it++) {
 			Container &container = it->second;
 			if (container.has(p_isolate)) {
-				to_remove.push_back(container.get_raw(p_isolate));
+				to_remove.push_back(container.get_raw(p_isolate).hash());
 				if (container.erase(p_isolate)) {
 					to_remove.push_back(it->first);
 				}
 			}
 		}
 
-		for (SymbolGlobal symbol : to_remove) {
-			cache_.erase(symbol);
+		for (const SymbolGlobalHash hash : to_remove) {
+			cache_.erase(hash);
 		}
 	}
 
@@ -305,17 +247,19 @@ private:
 	jsb_force_inline static void add(
 			v8::Isolate *p_from_isolate, const v8::Local<v8::Symbol> &p_from_symbol,
 			v8::Isolate *p_to_isolate, const v8::Local<v8::Symbol> &p_to_symbol) {
-		SymbolGlobal from_symbol = SymbolGlobal(p_from_isolate, p_from_symbol);
-		SymbolGlobal to_symbol = SymbolGlobal(p_to_isolate, p_to_symbol);
+		SymbolGlobal &&from_symbol = SymbolGlobal(p_from_isolate, p_from_symbol);
+		SymbolGlobal &&to_symbol = SymbolGlobal(p_to_isolate, p_to_symbol);
 
-		cache_[from_symbol].emplace(p_to_isolate, std::forward<SymbolGlobal>(to_symbol));
-		cache_[to_symbol].emplace(p_from_isolate, std::forward<SymbolGlobal>(from_symbol));
+		cache_[from_symbol.hash()].emplace(p_to_isolate, std::forward<SymbolGlobal &&>(to_symbol));
+		cache_[to_symbol.hash()].emplace(p_from_isolate, std::forward<SymbolGlobal &&>(from_symbol));
 	}
 
 	static std::unordered_map<v8::Isolate *, TStrongRef<v8::Function>> key_for_funcs;
-	// 获取全局注册 Symbol 的键名，若未注册则返回空字符串
+	/**
+	 * NOTE: 工具函数不创建句柄作用域
+	 * @brief 获取全局注册 Symbol 的键名，若未注册则返回空字符串
+	 */
 	jsb_force_inline static v8::MaybeLocal<v8::String> get_symbol_key_for(v8::Isolate *isolate, v8::Local<v8::Symbol> symbol) {
-		v8::EscapableHandleScope handle_scope(isolate);
 		v8::Local<v8::Context> context = Environment::wrap(isolate)->get_context();
 
 		// 方法1: 使用预编译的 JS 函数（推荐，性能好）
@@ -344,7 +288,7 @@ private:
 
 		v8::Local<v8::Value> val;
 		if (result.ToLocal(&val) && val->IsString() && val.As<v8::String>()->Length() > 0) {
-			return handle_scope.Escape(val.As<v8::String>());
+			return val.As<v8::String>();
 		}
 		return v8::MaybeLocal<v8::String>();
 	}
@@ -381,7 +325,7 @@ public:
 			return false;
 		}
 
-		v8::EscapableHandleScope handle_scope(p_isolate);
+		v8::HandleScope handle_scope(p_isolate);
 		const v8::Isolate::Scope isolate_scope(p_isolate);
 		if (!get_symbol_key_for(p_isolate, p_symbol).IsEmpty() || v8::Symbol::GetAsyncIterator(p_isolate) == p_symbol || v8::Symbol::GetHasInstance(p_isolate) == p_symbol || v8::Symbol::GetIsConcatSpreadable(p_isolate) == p_symbol || v8::Symbol::GetIterator(p_isolate) == p_symbol || v8::Symbol::GetMatch(p_isolate) == p_symbol || v8::Symbol::GetReplace(p_isolate) == p_symbol || v8::Symbol::GetSearch(p_isolate) == p_symbol || v8::Symbol::GetSplit(p_isolate) == p_symbol || v8::Symbol::GetToPrimitive(p_isolate) == p_symbol || v8::Symbol::GetToStringTag(p_isolate) == p_symbol || v8::Symbol::GetUnscopables(p_isolate) == p_symbol) {
 			return false;
@@ -389,20 +333,21 @@ public:
 		return true;
 	}
 
-	// jsb_force_inline
+	/**
+	 * NOTE: 工具函数不创建句柄作用域, 将在 p_to_isolate 中创建Symbol
+	 */
 	static v8::Local<v8::Symbol> get_symbol(v8::Isolate *p_from_isolate, const v8::Local<v8::Symbol> &p_from_symbol, v8::Isolate *p_to_isolate) {
 		// Well-Known
 		WellKnownSymbolGetter *getter = get_well_known_symbol_getter(p_from_isolate, p_from_symbol);
 		if (getter != nullptr) {
-			v8::EscapableHandleScope handle_scope2(p_to_isolate);
 			const v8::Isolate::Scope isolate_scope2(p_to_isolate);
 			const v8::Local<v8::Symbol> to_symbol = (*getter)(p_to_isolate);
-			return handle_scope2.Escape(to_symbol);
+			return to_symbol;
 		}
 
 		// Cache
 		SymbolGlobal from_symbol(p_from_isolate, p_from_symbol);
-		if (const auto it = cache_.find(from_symbol); it != cache_.end()) {
+		if (const auto it = cache_.find(from_symbol.hash()); it != cache_.end()) {
 			if (it->second.has(p_to_isolate)) {
 				return it->second.get(p_to_isolate);
 			}
@@ -414,14 +359,13 @@ public:
 		// Create new cache
 		const bool is_normal = get_symbol_key_for(p_from_isolate, p_from_symbol).IsEmpty();
 
-		v8::EscapableHandleScope handle_scope2(p_to_isolate);
 		const v8::Isolate::Scope isolate_scope2(p_to_isolate);
 
 		v8::Local<v8::Value> desc_value = p_from_symbol->Description(p_from_isolate);
 
 		v8::Local<v8::String> transferred_desc;
 		if (desc_value->IsString()) {
-			transferred_desc = transfer_string(p_from_isolate, desc_value.As<v8::String>(), p_to_isolate);
+			transferred_desc = _transfer_string(p_from_isolate, desc_value.As<v8::String>(), p_to_isolate);
 		} else {
 			transferred_desc = v8::String::Empty(p_to_isolate);
 		}
@@ -434,7 +378,7 @@ public:
 		}
 
 		add(p_from_isolate, p_from_symbol, p_to_isolate, to_symbol);
-		return handle_scope2.Escape(to_symbol);
+		return to_symbol;
 	}
 };
 
@@ -486,7 +430,7 @@ private:
 
 private:
 	static std::unordered_multimap<WrapperIdentity, TWeakRef<v8::Object>, WrapperIdentityHash, WrapperIdentityEqual> wrapper_cache_;
-	static Mutex lock_;
+	static std::mutex lock_;
 	static std::unordered_map<v8::Isolate *, TStrongRef<v8::Name>> flag_symbols_;
 
 public:
@@ -512,21 +456,18 @@ public:
 public:
 	v8::Isolate *get_isolate() const { return isolate_; }
 	v8::Local<v8::Object> get_raw_value() const { return value_.object_.Get(isolate_); }
-	static v8::Local<v8::Name> get_flag_symbol(v8::Isolate *p_isolate) {
+	static const TStrongRef<v8::Name> &get_flag_symbol(v8::Isolate *p_isolate) {
 		MUTEX_LOCK_GUARD(lock_);
-		const v8::Isolate::Scope isolate_scope(p_isolate);
-		v8::EscapableHandleScope handle_scope(p_isolate);
 
 		v8::Local<v8::Name> symbol;
-		const auto it = flag_symbols_.find(p_isolate);
-		if (it != flag_symbols_.end()) {
-			symbol = it->second.object_.Get(p_isolate);
-		} else {
-			symbol = v8::Symbol::New(p_isolate, v8::String::NewFromUtf8Literal(p_isolate, u8"DontTouchMe!"));
-			flag_symbols_.emplace(p_isolate, TStrongRef<v8::Name>{ p_isolate, symbol });
+		auto it = flag_symbols_.find(p_isolate);
+		if (it == flag_symbols_.end()) {
+			const v8::Isolate::Scope isolate_scope(p_isolate);
+			v8::HandleScope handle_scope(p_isolate);
+			v8::Local<v8::Symbol> symbol = v8::Symbol::New(p_isolate, v8::String::NewFromUtf8Literal(p_isolate, "DontTouchMe!"));
+			it = flag_symbols_.emplace(p_isolate, TStrongRef<v8::Name>{ p_isolate, symbol }).first;
 		}
-
-		return handle_scope.Escape(symbol);
+		return it->second;
 	}
 
 	static void remove_flag_symbol(v8::Isolate *p_isolate) {
@@ -537,7 +478,7 @@ public:
 
 std::unordered_map<v8::Isolate *, TStrongRef<v8::Name>> CrossWrapper::flag_symbols_;
 std::unordered_multimap<WrapperIdentity, TWeakRef<v8::Object>, CrossWrapper::WrapperIdentityHash, CrossWrapper::WrapperIdentityEqual> CrossWrapper::wrapper_cache_{};
-Mutex CrossWrapper::lock_;
+std::mutex CrossWrapper::lock_;
 
 class FunctionCrossWrapper : public CrossWrapper {
 private:
@@ -549,7 +490,9 @@ public:
 	}
 
 public:
+	/** NOTE: 不创建句柄作用域，将在 p_host_env 中创建对象 */
 	static v8::Local<v8::Object> create(Environment *p_host_env, v8::Isolate *p_guest_isolate, const v8::Local<v8::Function> &p_function) {
+		/** NOTE: 操作中 p_guest_isolate 未涉及 V8 API  */
 		v8::MaybeLocal<v8::Object> maybe_cache = try_get_cache(p_guest_isolate, p_function, p_host_env->get_isolate());
 		v8::Local<v8::Object> cache;
 		if (maybe_cache.ToLocal(&cache)) {
@@ -559,11 +502,8 @@ public:
 
 		v8::Isolate *isolate = p_host_env->get_isolate();
 		jsb_check(isolate != p_guest_isolate);
-		const v8::Isolate::Scope isolate_scope1(p_guest_isolate);
-		const v8::HandleScope handle_scope1(p_guest_isolate);
 
 		const v8::Isolate::Scope isolate_scope(isolate);
-		v8::EscapableHandleScope handle_scope(isolate);
 
 		NativeClassID class_id;
 		const StringName &class_name = Names::FunctionCrossWrapper();
@@ -580,21 +520,22 @@ public:
 
 		const v8::Local<v8::Function> wrapper = v8::Function::New(context, &FunctionCrossWrapper::call, data).ToLocalChecked();
 
-		const v8::Local<v8::Name> symbol = get_flag_symbol(isolate);
-		wrapper.As<v8::Object>()->Set(context, symbol, data).Check();
+		const TStrongRef<v8::Name> &symbol = get_flag_symbol(isolate);
+		wrapper.As<v8::Object>()->Set(context, symbol.object_.Get(isolate), data).Check();
 		// TODO: Freeze 或 proxy, 防止被篡改
 
 		add_cache(p_guest_isolate, p_function, isolate, wrapper);
-		return handle_scope.Escape(wrapper);
+		return wrapper;
 	}
 
 	static void call(const v8::FunctionCallbackInfo<v8::Value> &info) {
-		v8::Isolate *isolate = info.GetIsolate();
-		Environment *env = Environment::wrap(isolate);
-		const v8::HandleScope handle_scope(isolate);
-		const v8::Isolate::Scope isolate_scope(isolate);
+		v8::Isolate *host_isolate = info.GetIsolate();
+		Environment *host_env = Environment::wrap(host_isolate);
+		const v8::HandleScope handle_scope(host_isolate);
+		const v8::Isolate::Scope isolate_scope(host_isolate);
 
 		const FunctionCrossWrapper *wrapper = (const FunctionCrossWrapper *)(info.Data().As<v8::Object>()->GetAlignedPointerFromInternalField(IF_Pointer));
+
 		v8::Isolate *guest_isolate = wrapper->get_isolate();
 		const v8::HandleScope handle_scope1(guest_isolate);
 		const v8::Isolate::Scope isolate_scope1(guest_isolate);
@@ -604,15 +545,16 @@ public:
 		args.reserve(info.Length());
 		for (int i = 0; i < info.Length(); i++) {
 			const v8::Local<v8::Value> arg = info[i];
-			args.push_back(wrap_cross_env_value(guest_env, isolate, arg));
+			v8::Local<v8::Value> warpped_arg = wrap_cross_env_value(guest_env, host_isolate, arg); /** NOTE: 将在 guest_env(guest_isolate) 中创建对象 */
+			args.push_back(warpped_arg);
 		}
 
 		const v8::Local<v8::Function> function = wrapper->get_function();
 		const v8::Local<v8::Context> guest_context = guest_env->get_context();
 		const v8::Context::Scope context_scope(guest_context);
 
-		v8::Local<v8::Value> result = function->Call(guest_context, v8::Undefined(guest_isolate), info.Length(), args.ptr()).ToLocalChecked();
-		const v8::Local<v8::Value> wrapped_result = wrap_cross_env_value(env, guest_isolate, result);
+		v8::Local<v8::Value> result = function->Call(guest_context, v8::Undefined(guest_isolate), args.size(), args.ptr()).ToLocalChecked();
+		const v8::Local<v8::Value> wrapped_result = wrap_cross_env_value(host_env, guest_isolate, result); /** NOTE: 将在 host_env(host_isolate) 中创建对象 */
 		info.GetReturnValue().Set(wrapped_result);
 	}
 
@@ -656,6 +598,7 @@ public:
 	v8::Local<v8::Object> get_object() const { return value_.object_.Get(isolate_).As<v8::Object>(); }
 
 private:
+	/** NOTE: 工具函数不创建句柄作用域，将在 p_to_isolate 中创建对象 */
 	jsb_force_inline static v8::Local<v8::Name> transfer_key(v8::Isolate *p_from_isolate, const v8::Local<v8::Name> &p_from_key, v8::Isolate *p_to_isolate) {
 		if (p_from_key->IsSymbol()) {
 			if (SymbolCrossUtils::is_normal_symbol(p_from_isolate, p_from_key.As<v8::Symbol>())) {
@@ -665,11 +608,13 @@ private:
 				return SymbolCrossUtils::get_symbol(p_from_isolate, p_from_key.As<v8::Symbol>(), p_to_isolate);
 			}
 		}
-		return transfer_string(p_from_isolate, p_from_key.As<v8::String>(), p_to_isolate);
+		return _transfer_string(p_from_isolate, p_from_key.As<v8::String>(), p_to_isolate);
 	}
 
 public:
+	/** NOTE: 不创建句柄作用域，将在 p_host_env 中创建对象 */
 	static v8::Local<v8::Object> create(Environment *p_host_env, v8::Isolate *p_guest_isolate, const v8::Local<v8::Object> &p_guest_obj) {
+		/** NOTE: 在操作中 p_guest_isolate 未涉及 V8 API */
 		v8::MaybeLocal<v8::Object> maybe_cache = try_get_cache(p_guest_isolate, p_guest_obj, p_host_env->get_isolate());
 		v8::Local<v8::Object> cache;
 		if (maybe_cache.ToLocal(&cache)) {
@@ -680,7 +625,7 @@ public:
 		v8::Isolate *isolate = p_host_env->get_isolate();
 		jsb_check(isolate != p_guest_isolate);
 		const v8::Isolate::Scope isolate_scope(isolate);
-		v8::EscapableHandleScope handle_scope(isolate);
+
 		const v8::Local<v8::Context> context = p_host_env->get_context();
 		const v8::Context::Scope context_scope(context);
 
@@ -689,8 +634,6 @@ public:
 		const NativeClassInfoPtr class_info = p_host_env->find_native_class(class_name, &class_id);
 		const v8::Local<v8::Object> wrapper = class_info->clazz.NewInstance(context);
 
-		const v8::Isolate::Scope isolate_scope1(p_guest_isolate);
-		const v8::HandleScope handle_scope1(p_guest_isolate);
 		ObjectCrossWrapper *ptr = memnew(ObjectCrossWrapper(p_guest_isolate, p_guest_obj));
 		const NativeObjectID handle = p_host_env->bind_pointer(class_id, NativeClassType::Custom, ptr, wrapper, 0);
 		jsb_check(handle);
@@ -717,7 +660,7 @@ public:
 		v8::Local<v8::Proxy> proxy = v8::Proxy::New(context, wrapper, handler).ToLocalChecked();
 
 		add_cache(p_guest_isolate, p_guest_obj, isolate, proxy);
-		return handle_scope.Escape(proxy);
+		return proxy;
 	}
 
 	static void proxy_has(const v8::FunctionCallbackInfo<v8::Value> &info) {
@@ -729,24 +672,24 @@ public:
 		v8::Local<v8::Object> target = info[0].As<v8::Object>();
 		const v8::Local<v8::Name> key = info[1].As<v8::Name>();
 
-		const v8::Local<v8::Name> symbol = get_flag_symbol(isolate);
+		const TStrongRef<v8::Name> &symbol = get_flag_symbol(isolate);
 		const Environment *env = Environment::wrap(isolate);
 		const v8::Local<v8::Context> context = env->get_context();
 		const v8::Context::Scope context_scope(context);
-		if (symbol->Equals(context, key).ToChecked()) {
+		if (symbol.object_.Get(isolate)->Equals(context, key).ToChecked()) {
 			info.GetReturnValue().Set(v8::Boolean::New(isolate, true));
 		} else {
 			const ObjectCrossWrapper *wrapper = (const ObjectCrossWrapper *)(target->GetAlignedPointerFromInternalField(IF_Pointer));
 			v8::Isolate *guest_isolate = wrapper->get_isolate();
 
+			const v8::Isolate::Scope isolate_scope1(guest_isolate);
+			const v8::HandleScope handle_scope1(guest_isolate); // 为 guest_isolate 创建句柄作用域，后续的工具函数调用将在其中创建对象
 			const v8::Local<v8::Name> transferred_key = transfer_key(isolate, key, guest_isolate);
 			if (transferred_key.IsEmpty()) {
 				info.GetReturnValue().Set(v8::Boolean::New(isolate, true));
 				return;
 			}
 
-			const v8::Isolate::Scope isolate_scope1(guest_isolate);
-			const v8::HandleScope handle_scope1(guest_isolate);
 			const v8::Local<v8::Context> guest_context = Environment::wrap(guest_isolate)->get_context();
 			const v8::Context::Scope context_scope1(guest_context);
 
@@ -765,31 +708,29 @@ public:
 		const v8::Local<v8::Object> target = info[0].As<v8::Object>();
 		const v8::Local<v8::Name> key = info[1].As<v8::Name>();
 
-		const v8::Local<v8::Name> symbol = get_flag_symbol(isolate);
+		const TStrongRef<v8::Name> &symbol = get_flag_symbol(isolate);
 		const Environment *env = Environment::wrap(isolate);
 		const v8::Local<v8::Context> context = env->get_context();
 		const v8::Context::Scope context_scope(context);
-		if (symbol->Equals(context, key).ToChecked()) {
+		if (symbol.object_.Get(isolate)->Equals(context, key).ToChecked()) {
 			info.GetReturnValue().Set(v8::Boolean::New(isolate, true));
 		} else {
 			const ObjectCrossWrapper *wrapper = (const ObjectCrossWrapper *)(target->GetAlignedPointerFromInternalField(IF_Pointer));
 			v8::Isolate *guest_isolate = wrapper->get_isolate();
 
+			const v8::Isolate::Scope isolate_scope1(guest_isolate);
+			const v8::HandleScope handle_scope1(guest_isolate); // 为 guest_isolate 创建句柄作用域，后续的工具函数调用将在其中创建对象
 			const v8::Local<v8::Name> transferred_key = transfer_key(isolate, key, guest_isolate);
 			if (transferred_key.IsEmpty()) {
 				info.GetReturnValue().Set(v8::Undefined(isolate));
 				return;
 			}
 
-			const v8::Isolate::Scope isolate_scope1(guest_isolate);
-			const v8::HandleScope handle_scope1(guest_isolate);
 			const v8::Local<v8::Context> guest_context = Environment::wrap(guest_isolate)->get_context();
-			const v8::Context::Scope context_scope1(guest_context);
-
 			const v8::Local<v8::Object> guest_object = wrapper->get_object();
 
 			const v8::Local<v8::Value> value = guest_object->Get(guest_context, transferred_key).ToLocalChecked();
-			const v8::Local<v8::Value> result = wrap_cross_env_value(Environment::wrap(isolate), guest_isolate, value);
+			const v8::Local<v8::Value> result = wrap_cross_env_value(Environment::wrap(isolate), guest_isolate, value); /** NOTE: 将在 isolate 中创建对象 */
 
 			info.GetReturnValue().Set(result);
 		}
@@ -804,28 +745,28 @@ public:
 		const v8::Local<v8::Name> key = info[1].As<v8::Name>();
 		const v8::Local<v8::Value> value = info[2].As<v8::Value>();
 
-		const v8::Local<v8::Name> symbol = get_flag_symbol(isolate);
+		const TStrongRef<v8::Name> &symbol = get_flag_symbol(isolate);
 		const v8::Local<v8::Context> context = Environment::wrap(isolate)->get_context();
 		const v8::Context::Scope context_scope(context);
-		if (symbol->Equals(context, key).ToChecked()) {
+		if (symbol.object_.Get(isolate)->Equals(context, key).ToChecked()) {
 			return;
 		} else {
 			const ObjectCrossWrapper *wrapper = (const ObjectCrossWrapper *)(target->GetAlignedPointerFromInternalField(IF_Pointer));
 			v8::Isolate *guest_isolate = wrapper->get_isolate();
 
+			const v8::Isolate::Scope isolate_scope1(guest_isolate);
+			const v8::HandleScope handle_scope1(guest_isolate); // 为 guest_isolate 创建句柄作用域，后续的工具函数调用将在其中创建对象
 			const v8::Local<v8::Name> transferred_key = transfer_key(isolate, key, guest_isolate);
 			if (transferred_key.IsEmpty()) {
 				return;
 			}
 
-			const v8::Isolate::Scope isolate_scope1(guest_isolate);
-			const v8::HandleScope handle_scope1(guest_isolate);
 			Environment *guest_env = Environment::wrap(guest_isolate);
 			const v8::Local<v8::Context> guest_context = guest_env->get_context();
 			const v8::Context::Scope context_scope1(guest_context);
 
 			const v8::Local<v8::Object> guest_object = wrapper->get_object();
-			v8::Local<v8::Value> wrapped = wrap_cross_env_value(guest_env, isolate, value);
+			v8::Local<v8::Value> wrapped = wrap_cross_env_value(guest_env, isolate, value); /** NOTE: 将在 guest_env(guest_isolate) 中创建对象 */
 			guest_object->Set(guest_context, transferred_key, wrapped).Check();
 		}
 	}
@@ -863,24 +804,24 @@ public:
 	}
 };
 
+/** NOTE: 将在 p_host_env 中创建对象，注意提前创建 HandleScope */
 static jsb_force_inline v8::Local<v8::Value> wrap_cross_env_value(Environment *p_host_env, v8::Isolate *p_guest_isolate, const v8::Local<v8::Value> &p_guest_value) {
-	v8::Isolate *isolate = p_host_env->get_isolate();
+	v8::Isolate *host_isolate = p_host_env->get_isolate();
 
 	const v8::Isolate::Scope guest_isolate_scope(p_guest_isolate);
 	const v8::HandleScope guest_handle_scope(p_guest_isolate);
-	if (isolate == p_guest_isolate) {
+	if (host_isolate == p_guest_isolate) {
 		// 同环境，直接返回
 		return p_guest_value;
 	}
 
-	const v8::Isolate::Scope isolate_scope(isolate);
-	v8::EscapableHandleScope handle_scope(isolate);
+	const v8::Isolate::Scope isolate_scope(host_isolate);
 
 	const v8::Local<v8::Context> guest_context = Environment::wrap(p_guest_isolate)->get_context();
 	const v8::Context::Scope context_scope(guest_context);
 	if (p_guest_value->IsFunction()) {
 		const v8::Local<v8::Function> func = p_guest_value.As<v8::Function>();
-		const v8::Local<v8::Name> symbol = CrossWrapper::get_flag_symbol(p_guest_isolate);
+		const v8::Local<v8::Name> symbol = CrossWrapper::get_flag_symbol(p_guest_isolate).object_.Get(p_guest_isolate);
 		const v8::Maybe<bool> has_meta = func->HasRealNamedProperty(guest_context, symbol);
 		if (has_meta.IsJust() && has_meta.ToChecked()) {
 			const v8::Local<v8::Value> meta = func->Get(guest_context, symbol).ToLocalChecked();
@@ -890,7 +831,7 @@ static jsb_force_inline v8::Local<v8::Value> wrap_cross_env_value(Environment *p
 			const NativeClassType::Type type = (NativeClassType::Type)(uintptr_t)obj->GetAlignedPointerFromInternalField(IF_ClassType);
 			jsb_check(type == NativeClassType::Custom);
 			const CrossWrapper *wrapper = static_cast<CrossWrapper *>(obj->GetAlignedPointerFromInternalField(IF_Pointer));
-			if (wrapper->get_isolate() == isolate) {
+			if (wrapper->get_isolate() == host_isolate) {
 				return wrapper->get_raw_value(); // 返回到原始环境
 			} else {
 				return wrap_cross_env_value(p_host_env, wrapper->get_isolate(), wrapper->get_raw_value()); // 传送到其他环境？
@@ -900,8 +841,7 @@ static jsb_force_inline v8::Local<v8::Value> wrap_cross_env_value(Environment *p
 		return FunctionCrossWrapper::create(p_host_env, p_guest_isolate, p_guest_value.As<v8::Function>());
 	} else if (p_guest_value->IsObject()) {
 		const v8::Local<v8::Object> obj = p_guest_value.As<v8::Object>();
-		const v8::Local<v8::Name> symbol =
-				CrossWrapper::get_flag_symbol(p_guest_isolate);
+		const v8::Local<v8::Name> symbol = CrossWrapper::get_flag_symbol(p_guest_isolate).object_.Get(p_guest_isolate);
 		const v8::Maybe<bool> has_meta = obj->HasOwnProperty(guest_context, symbol);
 		if (has_meta.IsJust() && has_meta.ToChecked()) {
 			const v8::Local<v8::Proxy> proxy = obj.As<v8::Proxy>();
@@ -910,7 +850,7 @@ static jsb_force_inline v8::Local<v8::Value> wrap_cross_env_value(Environment *p
 			const NativeClassType::Type type = (NativeClassType::Type)(uintptr_t)target->GetAlignedPointerFromInternalField(IF_ClassType);
 			jsb_check(type == NativeClassType::Custom);
 			const CrossWrapper *wrapper = static_cast<CrossWrapper *>(target->GetAlignedPointerFromInternalField(IF_Pointer));
-			if (wrapper->get_isolate() == isolate) {
+			if (wrapper->get_isolate() == host_isolate) {
 				return wrapper->get_raw_value(); // 返回到原始环境
 			} else {
 				return wrap_cross_env_value(p_host_env, wrapper->get_isolate(), wrapper->get_raw_value()); // 传送到其他环境？
@@ -919,8 +859,8 @@ static jsb_force_inline v8::Local<v8::Value> wrap_cross_env_value(Environment *p
 
 		return ObjectCrossWrapper::create(p_host_env, p_guest_isolate, p_guest_value.As<v8::Object>());
 	} else if (p_guest_value->IsSymbol()) {
-		const auto ret = SymbolCrossUtils::get_symbol(p_guest_isolate, p_guest_value.As<v8::Symbol>(), isolate);
-		return handle_scope.Escape(ret);
+		const auto ret = SymbolCrossUtils::get_symbol(p_guest_isolate, p_guest_value.As<v8::Symbol>(), host_isolate);
+		return ret;
 	} else {
 		v8::Local<v8::Value> out;
 		const bool isPrimitive = p_guest_value->ToPrimitive(guest_context).ToLocal(&out);
@@ -931,22 +871,24 @@ static jsb_force_inline v8::Local<v8::Value> wrap_cross_env_value(Environment *p
 			impl::TryCatch try_catch(p_guest_isolate);
 			serializer.WriteValue(guest_context, out).Check();
 			std::pair<uint8_t *, size_t> data = serializer.Release();
+			ERR_FAIL_COND_V_MSG(try_catch.has_caught(), {}, BridgeHelper::get_exception(try_catch));
 
 			const v8::Local<v8::Context> host_context = p_host_env->get_context();
 			const v8::Context::Scope host_context_scope(host_context);
 
 			// 反序列化到目标 Isolate
-			v8::ValueDeserializer deserializer(isolate, data.first, data.second);
+			v8::ValueDeserializer deserializer(host_isolate, data.first, data.second);
 			impl::TryCatch try_catch1(p_guest_isolate);
 			deserializer.ReadHeader(host_context).Check();
 			v8::Local<v8::Value> result = deserializer.ReadValue(host_context).ToLocalChecked();
-
 			delete[] data.first;
 
-			return handle_scope.Escape(result);
+			ERR_FAIL_COND_V_MSG(try_catch1.has_caught(), {}, BridgeHelper::get_exception(try_catch1));
+
+			return result;
 		} else {
 			jsb_checkf(isPrimitive, "Wrapper failed.");
-			return v8::Undefined(isolate);
+			return v8::Undefined(host_isolate);
 		}
 	}
 }
@@ -966,7 +908,7 @@ class ShadowRealm {
 	NativeObjectID handle_;
 
 	void *token_ = nullptr;
-	v8::Persistent<v8::Object> context_obj_handle_;
+	v8::Global<v8::Object> context_obj_handle_;
 	jsb::DefaultModuleResolver *module_resolver_{ nullptr };
 
 	std::shared_ptr<Environment> env_{ nullptr };
@@ -974,8 +916,8 @@ class ShadowRealm {
 	friend class TransferableShadowRealm;
 
 protected:
-	static internal::SArray<ShadowRealm *, ShadowRealmID> shadow_realm_list_;
-	static Mutex lock_;
+	static internal::SArray<ShadowRealm *, ShadowRealmID> &get_shadow_realm_list();
+	static std::mutex lock_;
 
 public:
 	ShadowRealm(Environment *p_master) : token_(p_master) {}
@@ -993,7 +935,7 @@ public:
 		params.initial_class_slots = JSB_SHADOW_REALM_INITIAL_CLASS_SLOTS;
 		params.initial_object_slots = JSB_SHADOW_REALM_INITIAL_OBJECT_SLOTS;
 		params.initial_script_slots = JSB_SHADOW_REALM_INITIAL_SCRIPT_SLOTS;
-		params.thread_id = Thread::get_caller_id();
+		params.thread_id = OS::get_singleton()->get_thread_caller_id();
 		params.type = Environment::Type::Shadow;
 
 		env_ = std::make_shared<Environment>(params);
@@ -1079,11 +1021,11 @@ protected:
 		MUTEX_LOCK_GUARD(lock_);
 
 		ShadowRealm *impl;
-		if (shadow_realm_list_.try_get_value(p_shadow_id, impl)) {
+		if (get_shadow_realm_list().try_get_value(p_shadow_id, impl)) {
 			impl->finish();
 
-			ShadowRealm::shadow_realm_list_.remove_at(p_shadow_id);
-			jsb_check(!ShadowRealm::shadow_realm_list_.is_valid_index(p_shadow_id));
+			get_shadow_realm_list().remove_at(p_shadow_id);
+			jsb_check(!get_shadow_realm_list().is_valid_index(p_shadow_id));
 
 			impl->id_ = ShadowRealmID::none();
 			return true;
@@ -1122,7 +1064,7 @@ protected:
 					const v8::Context::Scope context_scope1(guest_context);
 
 					const v8::Local<v8::Object> exports_obj = exports.As<v8::Object>();
-					const v8::Local<v8::String> value_name_str = transfer_string(guest_isolate, value_name.As<v8::String>(), isolate);
+					const v8::Local<v8::String> value_name_str = _transfer_string(guest_isolate, value_name.As<v8::String>(), isolate);
 
 					v8::Local<v8::Value> result;
 					if (exports_obj->Get(guest_context, value_name_str).ToLocal(&result)) {
@@ -1186,13 +1128,13 @@ public:
 		MUTEX_LOCK_GUARD(lock_);
 
 		ShadowRealm *realm = memnew(ShadowRealm(env));
-		const ShadowRealmID id = ShadowRealm::shadow_realm_list_.add(realm);
+		const ShadowRealmID id = get_shadow_realm_list().add(realm);
 		if (realm->init(id, env, params)) {
 			const NativeObjectID handle = env->bind_pointer(class_id, NativeClassType::Shadow, realm, self, 0);
 			jsb_check(handle);
 			realm->set_handle(handle);
 		} else {
-			ShadowRealm::shadow_realm_list_.remove_at(id);
+			get_shadow_realm_list().remove_at(id);
 			realm->id_ = ShadowRealmID::none();
 		}
 	}
@@ -1201,7 +1143,7 @@ public:
 
 	static bool is_valid(ShadowRealmID p_id) {
 		MUTEX_LOCK_GUARD(lock_);
-		return shadow_realm_list_.is_valid_index(p_id);
+		return get_shadow_realm_list().is_valid_index(p_id);
 	}
 
 	static void addAllowedModuleSearchPath(const v8::FunctionCallbackInfo<v8::Value> &info) {
@@ -1235,19 +1177,15 @@ public:
 		const ShadowRealm *realm = (const ShadowRealm *)info.This()->GetAlignedPointerFromInternalField(IF_Pointer);
 
 		String wrapped_source;
-		v8::Isolate *isolate = info.GetIsolate();
-		Environment *env = Environment::wrap(isolate);
+		v8::Isolate *host_isolate = info.GetIsolate();
 		{
-			const v8::HandleScope handle_scope(isolate);
-			const v8::Isolate::Scope isolate_scope(isolate);
-
 			if (info.Length() <= 0 || !info[0]->IsString()) {
-				jsb_throw(isolate, "bad argument: require a string.");
+				jsb_throw(host_isolate, "bad argument: require a string.");
 				return;
 			}
 			v8::Local<v8::String> source_text = info[0].As<v8::String>();
 
-			const String source_str = impl::Helper::to_string(isolate, source_text);
+			const String source_str = impl::Helper::to_string(host_isolate, source_text);
 			wrapped_source = jsb_format("(function() { return (%s); })()", source_str);
 		}
 
@@ -1266,11 +1204,16 @@ public:
 			v8::Local<v8::Value> result = script->Run(guest_context).ToLocalChecked();
 
 			if (try_catch.has_caught()) {
-				impl::Helper::throw_error(guest_isolate, BridgeHelper::get_exception(try_catch));
+				jsb_throw(guest_isolate, BridgeHelper::get_exception(try_catch));
 				return;
 			}
 
-			info.GetReturnValue().Set(wrap_cross_env_value(env, guest_isolate, result));
+			const v8::HandleScope handle_scope(host_isolate);
+			const v8::Isolate::Scope isolate_scope(host_isolate); /** NOTE: 将在 host_env 中创建对象 */
+			Environment *host_env = Environment::wrap(host_isolate);
+			v8::Local<v8::Value> wrapped_result = wrap_cross_env_value(host_env, guest_isolate, result);
+
+			info.GetReturnValue().Set(wrapped_result);
 		}
 	}
 
@@ -1311,7 +1254,7 @@ public:
 		v8::Local<v8::Value> result = _importValue(env, realm, specifier, value_name.As<v8::String>(), err_msg);
 		if (result.IsEmpty()) {
 			v8::Isolate *guest_isolate = realm->env_->get_isolate();
-			impl::Helper::throw_error(guest_isolate, err_msg);
+			jsb_throw(guest_isolate, err_msg);
 			resolver->Reject(context, impl::Helper::new_string(isolate, err_msg)).Check();
 		} else {
 			resolver->Resolve(context, result).Check();
@@ -1348,7 +1291,7 @@ public:
 		v8::Local<v8::Value> result = _importValue(env, realm, specifier, value_name.As<v8::String>(), err_msg);
 		if (result.IsEmpty()) {
 			v8::Isolate *guest_isolate = realm->env_->get_isolate();
-			impl::Helper::throw_error(guest_isolate, err_msg);
+			jsb_throw(guest_isolate, err_msg);
 		} else {
 			info.GetReturnValue().Set(result);
 		}
@@ -1365,14 +1308,14 @@ public:
 		while (true) {
 			MUTEX_LOCK_GUARD(lock_);
 
-			const ShadowRealmID id = shadow_realm_list_.get_first_index();
+			const ShadowRealmID id = get_shadow_realm_list().get_first_index();
 			if (!id) {
 				break;
 			}
-			jsb_check(shadow_realm_list_.is_valid_index(id));
-			jsb_check(!shadow_realm_list_.is_empty());
+			jsb_check(get_shadow_realm_list().is_valid_index(id));
+			jsb_check(!get_shadow_realm_list().is_empty());
 			ShadowRealm *impl;
-			shadow_realm_list_.try_get_value(id, impl);
+			get_shadow_realm_list().try_get_value(id, impl);
 
 			if (impl) {
 				impl->finish();
@@ -1381,8 +1324,11 @@ public:
 	}
 };
 
-internal::SArray<ShadowRealm *, ShadowRealmID> ShadowRealm::shadow_realm_list_;
-Mutex ShadowRealm::lock_;
+internal::SArray<ShadowRealm *, ShadowRealmID> &ShadowRealm::get_shadow_realm_list() {
+	static internal::SArray<ShadowRealm *, ShadowRealmID> list;
+	return list;
+}
+std::mutex ShadowRealm::lock_;
 #pragma endregion ShadownRealm
 
 #pragma region ShadowRealmMessage
@@ -1464,7 +1410,7 @@ public:
 		params.initial_class_slots = JSB_SHADOW_REALM_INITIAL_CLASS_SLOTS;
 		params.initial_object_slots = JSB_SHADOW_REALM_INITIAL_OBJECT_SLOTS;
 		params.initial_script_slots = JSB_SHADOW_REALM_INITIAL_SCRIPT_SLOTS;
-		params.thread_id = Thread::get_caller_id();
+		params.thread_id = OS::get_singleton()->get_thread_caller_id();
 		params.type = Environment::Type::Shadow;
 
 		env_ = std::make_shared<Environment>(params);
@@ -1528,7 +1474,7 @@ private:
 		MUTEX_LOCK_GUARD(lock_);
 
 		ShadowRealm *impl;
-		if (shadow_realm_list_.try_get_value(p_id, impl)) {
+		if (get_shadow_realm_list().try_get_value(p_id, impl)) {
 			o_handle = static_cast<TransferableShadowRealm *>(impl)->get_handle();
 			o_token_ptr = impl->get_token();
 		} else {
@@ -1594,7 +1540,7 @@ private:
 					return std::pair<uint8_t *, size_t>();
 				}
 
-				if (!transfer_var.is_array()) {
+				if (transfer_var.get_type() != Variant::ARRAY) {
 					jsb_throw(isolate, "transfer list must be an array");
 					return std::pair<uint8_t *, size_t>();
 				}
@@ -1722,7 +1668,7 @@ private:
 		ShadowRealm *impl;
 		{
 			MUTEX_LOCK_GUARD(lock_);
-			if (!shadow_realm_list_.try_get_value(p_id, impl)) {
+			if (!get_shadow_realm_list().try_get_value(p_id, impl)) {
 				JSB_SHADOW_REALM_LOG(Error, "can't post message to a dead shadowRealm (%d)", p_id);
 			}
 		}
@@ -1848,13 +1794,13 @@ public:
 		MUTEX_LOCK_GUARD(lock_);
 
 		TransferableShadowRealm *realm = memnew(TransferableShadowRealm(env));
-		const ShadowRealmID id = ShadowRealm::shadow_realm_list_.add(realm);
+		const ShadowRealmID id = get_shadow_realm_list().add(realm);
 		if (realm->init(id, env, params)) {
 			const NativeObjectID handle = env->bind_pointer(class_id, NativeClassType::Shadow, realm, self, 0);
 			jsb_check(handle);
 			realm->set_handle(handle);
 		} else {
-			ShadowRealm::shadow_realm_list_.remove_at(id);
+			get_shadow_realm_list().remove_at(id);
 			realm->id_ = ShadowRealmID::none();
 		}
 	}

@@ -23,7 +23,7 @@ namespace jsb::impl
         {
             const size_t size = array_buffer->ByteLength();
             PackedByteArray packed;
-            const Error err = packed.resize((int) size);
+            const Error err = (Error)packed.resize((int) size);
             jsb_unused(err);
             jsb_check(err == OK);
             const void* data = array_buffer->Data();
@@ -31,7 +31,8 @@ namespace jsb::impl
             return packed;
         }
 
-        static v8::Local<v8::ArrayBuffer> to_array_buffer(v8::Isolate* isolate, const Vector<uint8_t>& packed)
+        template<typename PackedTy, typename std::enable_if_t<sizeof(decltype(*PackedTy().ptr())) == sizeof(uint8_t)>* = nullptr> // Vector<uint8_t> or PackedByteArray
+        static v8::Local<v8::ArrayBuffer> to_array_buffer(v8::Isolate* isolate, const PackedTy& packed)
         {
             const v8::Local<v8::ArrayBuffer> buffer = v8::ArrayBuffer::New(isolate, packed.size());
             void* data = buffer->Data();

@@ -14,12 +14,8 @@ namespace jsb::internal
             {
                 return p_base + p_add;
             }
-#if JSB_GDEXTENSION
             //TODO it must be a bug of godot-cpp codegen: string.hpp operator+ is not const
             return p_base.is_empty() ? p_add : const_cast<String&>(p_base) + '/' + p_add;
-#else
-            return p_base.is_empty() ? p_add : p_base + '/' + p_add;
-#endif
         }
 
         static String combine(const String& p_base, const String& p_add1, const String& p_add2)

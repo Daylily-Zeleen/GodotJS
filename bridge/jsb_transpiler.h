@@ -348,12 +348,15 @@ namespace jsb
                 Object* gd_object = ClassDB::instantiate(original_name);
 
                 // IS IT A TRUTH that ref_count==1 after creation_func??
-                jsb_check(!gd_object->is_ref_counted() || !((RefCounted*) gd_object)->is_referenced());
+                jsb_check([=]{
+                    RefCounted* ref_counted = Object::cast_to<RefCounted>(gd_object);
+                    return ref_counted == nullptr || ref_counted->get_reference_count() <= 1;
+                }());
                 environment->bind_godot_object(class_id, gd_object, self, true);
                 return;
             }
 
-            impl::Helper::throw_error(isolate, jsb_format(
+            jsb_throw(isolate, jsb_format(
                 "unexpected 'new.target', you may be instantiating a script class which is not exported as default. class: %s [native: %s (%d)]",
                 impl::Helper::to_string_opt(isolate, new_target->Get(context, jsb_name(environment, name))),
                 class_name, class_id));
@@ -363,9 +366,8 @@ namespace jsb
         {
             Object* self = (Object*) pointer;
             jsb_unused(runtime);
-            if (self->is_ref_counted())
+            if (RefCounted* ref_counted = Object::cast_to<RefCounted>(self))
             {
-                RefCounted* ref_counted = (RefCounted*) self;
                 // ** because godot does not support removing object_bindings from Object **
                 // this `unreference` call will loop back to `InstanceBindingCallbacks::reference_callback`
                 // make sure the pointer has already been removed from the object_db_

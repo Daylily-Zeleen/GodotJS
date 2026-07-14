@@ -8,7 +8,14 @@
 #include "../bridge/jsb_worker.h"
 #include "../bridge/jsb_shadow_realm.h"
 
+#include <godot_cpp/classes/resource_loader.hpp>
+#include <godot_cpp/classes/resource_format_loader.hpp>
+#include <godot_cpp/classes/packed_scene.hpp>
+#include <godot_cpp/classes/scene_state.hpp>
+#include <godot_cpp/classes/reg_ex_match.hpp>
+
 #include "jsb_script.h"
+#include "jsb_script_instance.h"
 
 #ifdef TOOLS_ENABLED
 #include "../weaver-editor/templates/templates.gen.h"
@@ -35,7 +42,7 @@ namespace jsb
         }
         else
         {
-            jsb_ensuref(p_is_shadow_allowed, "no available Environment on thread %d for %s: %s", Thread::get_caller_id(), jsb_typename(GodotJSScript), p_path_hint);
+            jsb_ensuref(p_is_shadow_allowed, "no available Environment on thread %d for %s: %s", OS::get_singleton()->get_thread_caller_id(), jsb_typename(GodotJSScript), p_path_hint);
             is_shadow_ = true;
         }
     }
@@ -67,14 +74,14 @@ GodotJSScriptLanguage::~GodotJSScriptLanguage()
     singleton_ = nullptr;
 
     //TODO manage script list in a safer way (access and ref with script.id)
-    MutexLock lock(mutex_);
+    std::lock_guard<std::mutex> lock(mutex_);
     while (SelfList<GodotJSScript>* script_el = script_list_.first())
     {
         script_el->remove_from_list();
     }
 }
 
-void GodotJSScriptLanguage::init()
+void GodotJSScriptLanguage::_init()
 {
     if (once_inited_) return;
 
@@ -84,11 +91,11 @@ void GodotJSScriptLanguage::init()
     JSB_LOG(VeryVerbose, "jsb lang init");
 
     jsb::Environment::CreateParams params;
-    params.initial_class_slots = (int) ClassDB::classes.size() + JSB_MASTER_INITIAL_CLASS_EXTRA_SLOTS;
+    params.initial_class_slots = (int) ClassDBSingleton::get_singleton()->get_class_list().size() + JSB_MASTER_INITIAL_CLASS_EXTRA_SLOTS;
     params.initial_object_slots = JSB_MASTER_INITIAL_OBJECT_SLOTS;
     params.initial_script_slots = JSB_MASTER_INITIAL_SCRIPT_SLOTS;
     params.debugger_port = jsb::internal::Settings::get_debugger_port();
-    params.thread_id = Thread::get_caller_id();
+    params.thread_id = OS::get_singleton()->get_thread_caller_id();
 
     // main environment
     environment_ = std::make_shared<jsb::Environment>(params);
@@ -105,7 +112,7 @@ void GodotJSScriptLanguage::init()
 #endif
 }
 
-void GodotJSScriptLanguage::finish()
+void GodotJSScriptLanguage::_finish()
 {
     jsb_check(once_inited_);
 #if JSB_DEBUG
@@ -121,7 +128,7 @@ void GodotJSScriptLanguage::finish()
     {
         std::vector<ShadowEnvironment> shadow_environments;
         {
-            MutexLock shadow_lock(shadow_mutex_);
+            std::lock_guard<std::mutex> shadow_lock(shadow_mutex_);
             shadow_environments = shadow_environments_;
             shadow_environments_.clear();
         }
@@ -133,17 +140,17 @@ void GodotJSScriptLanguage::finish()
     JSB_LOG(VeryVerbose, "jsb lang finish");
 }
 
-void GodotJSScriptLanguage::frame()
+void GodotJSScriptLanguage::_frame()
 {
-    const uint64_t base_ticks = Engine::get_singleton()->get_frame_ticks();
-    const uint64_t elapsed_milli = (base_ticks - last_ticks_) / 1000ULL; // milliseconds
+    const uint64_t base_ticks = Time::get_singleton()->get_ticks_msec();
+    const uint64_t elapsed_milli = (base_ticks - last_ticks_); // milliseconds
 
     last_ticks_ = base_ticks;
     environment_->update(elapsed_milli);
 
 #if JSB_DEBUG
     {
-        MutexLock lock(mutex_);
+        std::lock_guard<std::mutex> lock(mutex_);
         if (profile_info_map_.enabled)
         {
             for (auto& class_kv : profile_info_map_.classes)
@@ -179,15 +186,15 @@ struct JavaScriptControlFlowKeywords
     }
 };
 
-bool GodotJSScriptLanguage::is_control_flow_keyword(ConstStringRefCompat p_keyword) const
+bool GodotJSScriptLanguage::_is_control_flow_keyword(const String &p_keyword) const
 {
     static JavaScriptControlFlowKeywords collection;
     return collection.values.has(p_keyword);
 }
 
-Vector<String> GodotJSScriptLanguage::get_reserved_words() const
+PackedStringArray GodotJSScriptLanguage::_get_reserved_words() const
 {
-    return Vector<String> {
+    return PackedStringArray {
         "return", "function", "interface", "class", "let", "break", "as", "any", "switch", "case", "if", "enum",
         "throw", "else", "var", "number", "string", "get", "module", "instanceof", "typeof", "public", "private",
         "while", "void", "null", "super", "this", "new", "in", "await", "async", "extends", "static",
@@ -197,73 +204,47 @@ Vector<String> GodotJSScriptLanguage::get_reserved_words() const
     };
 }
 
-#if GODOT_4_5_OR_NEWER
-Vector<String> GodotJSScriptLanguage::get_doc_comment_delimiters() const
+PackedStringArray GodotJSScriptLanguage::_get_doc_comment_delimiters() const
 {
-    return Vector<String> { "///" };
+    return PackedStringArray { "///" };
 }
 
-Vector<String> GodotJSScriptLanguage::get_comment_delimiters() const
+PackedStringArray GodotJSScriptLanguage::_get_comment_delimiters() const
 {
-    return Vector<String> { "//", "/* */" };
+    return PackedStringArray { "//", "/* */" };
 }
 
-Vector<String> GodotJSScriptLanguage::get_string_delimiters() const
+PackedStringArray GodotJSScriptLanguage::_get_string_delimiters() const
 {
-    return Vector<String> { "' '", "\" \"", "` `" };
-}
-#else
-void GodotJSScriptLanguage::get_reserved_words(List<String>* p_words) const
-{
-    for (String keyword : get_reserved_words())
-    {
-        p_words->push_back(keyword);
-    }
+    return PackedStringArray { "' '", "\" \"", "` `" };
 }
 
-void GodotJSScriptLanguage::get_doc_comment_delimiters(List<String>* p_delimiters) const
+Dictionary GodotJSScriptLanguage::_validate(const String& p_script, const String& p_path, bool p_validate_functions, bool p_validate_errors, bool p_validate_warnings, bool p_validate_safe_lines) const
 {
-    p_delimiters->push_back("///");
-}
-
-void GodotJSScriptLanguage::get_comment_delimiters(List<String>* p_delimiters) const
-{
-    p_delimiters->push_back("//");
-    p_delimiters->push_back("/* */");
-}
-
-void GodotJSScriptLanguage::get_string_delimiters(List<String>* p_delimiters) const
-{
-    p_delimiters->push_back("' '");
-    p_delimiters->push_back("\" \"");
-    p_delimiters->push_back("` `");
-}
-#endif
-
-#if !GODOT_4_7_OR_NEWER
-Script* GodotJSScriptLanguage::create_script() const
-{
-    return memnew(GodotJSScript);
-}
-#endif
-
-bool GodotJSScriptLanguage::validate(const String& p_script, const String& p_path, List<String>* r_functions, List<ScriptError>* r_errors, List<Warning>* r_warnings, HashSet<int>* r_safe_lines) const
-{
+    Dictionary result;
+    // TODO
+    // "functions": PackedStringArray
+    // "errors": Array[Dictionary] ScriptError {"line": int, "column": int, "message": String}
+    // "warnings": Array[Dictionary] Warning {"start_line": int, "end_line": int, "code": int(Error Code), "string_code": String, "message": String}
+    // "safe_lines": PackedInt32Array
     if (environment_->validate_script(p_path))
     {
-        return true;
+        result["valid"] = true;
+        return result;
     }
 
     //TODO parse error info
-    ScriptError err;
-    err.line = 0;
-    err.column = 0;
-    err.message = "NOT_IMPLEMENTED";
-    r_errors->push_back(err);
-    return false;
+    result["valid"] = false;
+
+    Dictionary err;
+    err["line"] = 0;
+    err["column"] = 0;
+    err["message"] = "NOT_IMPLEMENTED";
+    result["errors"] = Array::make(err);
+    return result;
 }
 
-Ref<Script> GodotJSScriptLanguage::make_template(const String& p_template, const String& p_class_name, const String& p_base_class_name) const
+Ref<Script> GodotJSScriptLanguage::_make_template(const String& p_template, const String& p_class_name, const String& p_base_class_name) const
 {
     Ref<GodotJSScript> spt;
     spt.instantiate();
@@ -272,67 +253,68 @@ Ref<Script> GodotJSScriptLanguage::make_template(const String& p_template, const
                                  .replace("_CLASS_SNAKE_CASE_", jsb::internal::VariantUtil::to_snake_case_id(p_class_name))
                                  .replace("_CLASS_", jsb::internal::VariantUtil::to_pascal_case_id(p_class_name))
                                  .replace("_TS_", jsb::internal::Settings::get_indentation());
-    spt->set_source_code(processed_template);
+    spt->_set_source_code(processed_template);
     return spt;
 }
 
-Vector<ScriptLanguage::ScriptTemplate> GodotJSScriptLanguage::get_built_in_templates(ConstStringNameRefCompat p_object)
+TypedArray<Dictionary> GodotJSScriptLanguage::_get_built_in_templates(const StringName& p_object) const
 {
-    Vector<ScriptTemplate> templates;
+    TypedArray<Dictionary> templates;
 #ifdef TOOLS_ENABLED
-    for (int i = 0; i < TEMPLATES_ARRAY_SIZE; i++) {
-        if (TEMPLATES[i].inherit == p_object) {
-            templates.append(TEMPLATES[i]);
+    for (const Dictionary& template_dict : (::get_script_templates()))
+    {
+        if (template_dict["inherit"] == p_object)
+        {
+            templates.append(template_dict);
         }
     }
-#endif
+#endif // TOOLS_ENABLED
     return templates;
 }
 
-#if GODOT_4_3_OR_NEWER
 struct GodotJSScriptDepSort {
 	//must support sorting so inheritance works properly (parent must be reloaded first)
 	bool operator()(const Ref<GodotJSScript> &A, const Ref<GodotJSScript> &B) const {
 		if (A == B) {
 			return false; //shouldn't happen but..
 		}
-		const GodotJSScript *I = static_cast<const GodotJSScript *>(B->get_base_script().ptr());
+		GodotJSScript *I = static_cast<GodotJSScript*>(B->_get_base_script().ptr());
 		while (I) {
 			if (I == A.ptr()) {
 				// A is a base of B
 				return true;
 			}
 
-			I = static_cast<const GodotJSScript *>(I->get_base_script().ptr());
+			I = static_cast<GodotJSScript*>(I->_get_base_script().ptr());
 		}
 
 		return false; //not a base
 	}
 };
 
-void GodotJSScriptLanguage::reload_scripts(const Array& p_scripts, bool p_soft_reload)
+void GodotJSScriptLanguage::_reload_scripts(const Array& p_scripts, bool p_soft_reload)
 {
     reload_scripts_internal(p_scripts, p_soft_reload);
 }
 
-void GodotJSScriptLanguage::profiling_set_save_native_calls(bool p_enable)
+void GodotJSScriptLanguage::_profiling_set_save_native_calls(bool p_enable)
 {
-    JSB_LOG(Verbose, "TODO [GodotJSScriptLanguage::profiling_set_save_native_calls] NOT IMPLEMENTED");
+    JSB_LOG(Verbose, "TODO [GodotJSScriptLanguage::_profiling_set_save_native_calls] NOT IMPLEMENTED");
 }
-#endif
 
-void GodotJSScriptLanguage::reload_all_scripts()
+void GodotJSScriptLanguage::_reload_all_scripts()
 {
 #ifdef DEBUG_ENABLED
 	print_verbose("GodotJSScript: Reloading all scripts");
 	Array scripts;
 	{
-		MutexLock lock(mutex_);
+		std::lock_guard lock(mutex_);
 
 		SelfList<GodotJSScript> *elem = script_list_.first();
 		while (elem) {
-			if (elem->self()->get_path().is_resource_file()) {
-				print_verbose("GodotJSScript: Found: " + elem->self()->get_path());
+            const String script_path = elem->self()->get_path();
+			if (script_path.begins_with("res://")) {
+				print_verbose("GodotJSScript: Found: " + script_path);
 				scripts.push_back(Ref<GodotJSScript>(elem->self())); //cast to gdscript to avoid being erased by accident
 			}
 			elem = elem->next();
@@ -347,29 +329,27 @@ void GodotJSScriptLanguage::reload_all_scripts()
 #endif // DEBUG_ENABLED
 }
 
-void GodotJSScriptLanguage::reload_tool_script(const Ref<Script>& p_script, bool p_soft_reload)
+void GodotJSScriptLanguage::_reload_tool_script(const Ref<Script>& p_script, bool p_soft_reload)
 {
 	Array scripts;
     scripts.push_back(p_script);
 	reload_scripts_internal(scripts, p_soft_reload);
 }
 
-void GodotJSScriptLanguage::get_recognized_extensions(List<String>* p_extensions) const
+PackedStringArray GodotJSScriptLanguage::_get_recognized_extensions() const
 {
+    PackedStringArray extensions;
 #if JSB_USE_TYPESCRIPT
-    p_extensions->push_back(JSB_TYPESCRIPT_EXT);
+    extensions.push_back(JSB_TYPESCRIPT_EXT);
 #endif
-    p_extensions->push_back(JSB_JAVASCRIPT_EXT);
-    p_extensions->push_back(JSB_COMMONJS_EXT);
-    p_extensions->push_back(JSB_MODULE_EXT);
+    extensions.push_back(JSB_JAVASCRIPT_EXT);
+    extensions.push_back(JSB_COMMONJS_EXT);
+    extensions.push_back(JSB_MODULE_EXT);
+    return extensions;
 }
 
 
-#if GODOT_4_4_OR_NEWER
-String GodotJSScriptLanguage::get_global_class_name(const String &p_path, String *r_base_type, String *r_icon_path, bool *r_is_abstract, bool *r_is_tool) const
-#else
-String GodotJSScriptLanguage::get_global_class_name(const String& p_path, String* r_base_type, String* r_icon_path) const
-#endif
+Dictionary GodotJSScriptLanguage::_get_global_class_name(const String& p_path) const
 {
     // GodotJSScript implementation do not really support threaded access for now.
     // So, we can not load the script module in-place because `get_global_class_name` could be called from EditorFileSystem (background) scan.
@@ -378,17 +358,22 @@ String GodotJSScriptLanguage::get_global_class_name(const String& p_path, String
     //     * .ts files: `export default class ClassName extends BaseClassName`
     //     * .js files: `class ClassName extends BaseClassName` and `exports.default = ClassName` (with or without `;`)
 
-    // And, we do not support `r_is_abstract` here, please define all abstract class by not exporting it as `default`.
+    // And, we do not support abstract classes here, please define all abstract class by not exporting it as `default`.
     // It should be equivalent and enough for TS/JS since we do not rely on GodotJSScript to use abstract classes in TS/JS sources.
 
-    Error err;
-    const Ref<FileAccess> file_access = FileAccess::open(p_path, FileAccess::READ, &err);
-    if (err)
+    Dictionary result;
+    const Ref<FileAccess> file_access = FileAccess::open(p_path, FileAccess::READ);
+    if (file_access.is_null())
     {
-        return String();
+        return result;
     }
 
-    const String source = file_access->get_as_utf8_string();
+    const String source = file_access->get_as_text();
+    String class_name;
+    String base_type;
+    String icon_path; // TODO
+    bool is_tool {false};
+    bool is_abstract {false}; // TODO
     if (jsb::internal::PathUtil::is_recognized_javascript_extension(p_path))
     {
         // check if the class id defined in a single line (export default class ClassName extends BaseClassName)
@@ -396,28 +381,25 @@ String GodotJSScriptLanguage::get_global_class_name(const String& p_path, String
         const Ref<RegExMatch> match1 = js_class_name_matcher1_->search(source);
         if (match1.is_valid() && match1->get_group_count() == 2)
         {
-            const String class_name = match1->get_string(1);
-            if (r_base_type) *r_base_type = match1->get_string(2);
-            return class_name;
+            class_name = match1->get_string(1);
+            base_type = match1->get_string(2);
         }
-
-        // otherwise, it probably defined in separated lines (firstly, check 'class ClassName extends BaseClassName')
-        jsb_check(!js_class_name_matcher2_.is_null());
-        const Ref<RegExMatch> match2 = js_class_name_matcher2_->search(source);
-        if (match2.is_valid() && match2->get_group_count() == 1)
+        else
         {
-            const String class_name = match2->get_string(1);
-            if (r_base_type)
+            // otherwise, it probably defined in separated lines (firstly, check 'class ClassName extends BaseClassName')
+            jsb_check(!js_class_name_matcher2_.is_null());
+            const Ref<RegExMatch> match2 = js_class_name_matcher2_->search(source);
+            if (match2.is_valid() && match2->get_group_count() == 1)
             {
+                class_name = match2->get_string(1);
                 // then, check 'exports.default = ClassName'
                 const Ref<RegEx> base_matcher = RegEx::create_from_string(jsb::internal::format(R"(\s*class\s*%s\s*extends\s*(\w+)\s*\{?)", class_name));
                 const Ref<RegExMatch> base_match = base_matcher->search(source);
                 if (base_match.is_valid() && base_match->get_group_count() == 1)
                 {
-                    *r_base_type = base_match->get_string(1);
+                    base_type = base_match->get_string(1);
                 }
             }
-            return class_name;
         }
     }
     else
@@ -428,29 +410,34 @@ String GodotJSScriptLanguage::get_global_class_name(const String& p_path, String
         Ref<RegExMatch> match =  ts_class_name_matcher_->search(source);
         if (match.is_valid() && match->get_group_count() == 4)
         {
-#if GODOT_4_4_OR_NEWER
-            if (r_is_tool) *r_is_tool = match->get_string(1).size() > 0;
-#endif
-
-            const String class_name = match->get_string(2);
-            if (r_base_type) *r_base_type = match->get_string(4);
-            return class_name;
+            is_tool = !match->get_string(1).is_empty();
+            class_name = match->get_string(2);
+            base_type = match->get_string(4);
         }
     }
-    return {};
+
+    if (!class_name.is_empty())
+    {
+        result["class"] = class_name;
+        result["base_type"] = base_type;
+        result["icon_path"] = icon_path;
+        result["is_tool"] = is_tool;
+        result["is_abstract"] = is_abstract;
+    }
+    return result;
 }
 
-bool GodotJSScriptLanguage::handles_global_class_type(const String& p_type) const
+bool GodotJSScriptLanguage::_handles_global_class_type(const String& p_type) const
 {
     return p_type == jsb_typename(GodotJSScript);
 }
 
-String GodotJSScriptLanguage::get_name() const
+String GodotJSScriptLanguage::_get_name() const
 {
     return jsb_typename(GodotJSScript);
 }
 
-String GodotJSScriptLanguage::get_type() const
+String GodotJSScriptLanguage::_get_type() const
 {
     return jsb_typename(GodotJSScript);
 }
@@ -462,7 +449,7 @@ void GodotJSScriptLanguage::scan_external_changes()
 #ifdef TOOLS_ENABLED
     // fix scripts with no .js counterpart found (only missing scripts)
     {
-        MutexLock lock(mutex_);
+        std::lock_guard<std::mutex> lock(mutex_);
         const SelfList<GodotJSScript>* elem = script_list_.first();
         while (elem)
         {
@@ -473,28 +460,28 @@ void GodotJSScriptLanguage::scan_external_changes()
 #endif
 }
 
-void GodotJSScriptLanguage::thread_enter()
+void GodotJSScriptLanguage::_thread_enter()
 {
     jsb::Worker::on_thread_enter();
 }
 
-void GodotJSScriptLanguage::thread_exit()
+void GodotJSScriptLanguage::_thread_exit()
 {
     jsb::Worker::on_thread_exit();
 }
 
-void GodotJSScriptLanguage::profiling_start()
+void GodotJSScriptLanguage::_profiling_start()
 {
 #if JSB_DEBUG
-    MutexLock lock(mutex_);
+    std::lock_guard<std::mutex> lock(mutex_);
     profile_info_map_.enabled = true;
 #endif
 }
 
-void GodotJSScriptLanguage::profiling_stop()
+void GodotJSScriptLanguage::_profiling_stop()
 {
 #if JSB_DEBUG
-    MutexLock lock(mutex_);
+    std::lock_guard lock(mutex_);
     profile_info_map_.enabled = false;
 #endif
 }
@@ -505,7 +492,7 @@ void GodotJSScriptLanguage::add_script_call_profile_info(const String& p_path, c
     // please use Chrome DevTools for deep JS profiling.
 
 #if JSB_DEBUG
-    MutexLock lock(mutex_);
+    std::lock_guard lock(mutex_);
     if (!profile_info_map_.enabled) return;
 
     ScriptClassProfileInfo& prof = profile_info_map_.classes[p_class];
@@ -519,14 +506,13 @@ void GodotJSScriptLanguage::add_script_call_profile_info(const String& p_path, c
 
 bool GodotJSScriptLanguage::is_global_class_generic(const String &p_path) const
 {
-    Error err;
-    const Ref<FileAccess> file_access = FileAccess::open(p_path, FileAccess::READ, &err);
-    if (err)
+    const Ref<FileAccess> file_access = FileAccess::open(p_path, FileAccess::READ);
+    if (file_access.is_null())
     {
         return false;
     }
 
-    const String source = file_access->get_as_utf8_string();
+    const String source = file_access->get_as_text();
 
     if (jsb::internal::PathUtil::is_recognized_javascript_extension(p_path))
     {
@@ -548,10 +534,10 @@ namespace
     }
 }
 
-int GodotJSScriptLanguage::profiling_get_accumulated_data(ProfilingInfo* p_info_arr, int p_info_max)
+int32_t GodotJSScriptLanguage::_profiling_get_accumulated_data(ScriptLanguageExtensionProfilingInfo* p_info_arr, int32_t p_info_max)
 {
 #if JSB_DEBUG
-    MutexLock lock(mutex_);
+    std::lock_guard lock(mutex_);
     if (!profile_info_map_.enabled) return 0;
 
     int current = 0;
@@ -576,10 +562,10 @@ int GodotJSScriptLanguage::profiling_get_accumulated_data(ProfilingInfo* p_info_
 #endif
 }
 
-int GodotJSScriptLanguage::profiling_get_frame_data(ProfilingInfo* p_info_arr, int p_info_max)
+int32_t GodotJSScriptLanguage::_profiling_get_frame_data(ScriptLanguageExtensionProfilingInfo* p_info_arr, int32_t p_info_max)
 {
 #if JSB_DEBUG
-    MutexLock lock(mutex_);
+    std::lock_guard lock(mutex_);
     if (!profile_info_map_.enabled) return 0;
 
     int current = 0;
@@ -606,9 +592,9 @@ int GodotJSScriptLanguage::profiling_get_frame_data(ProfilingInfo* p_info_arr, i
 
 std::shared_ptr<jsb::Environment> GodotJSScriptLanguage::create_shadow_environment()
 {
-    const Thread::ID caller_id = Thread::get_caller_id();
+    const jsb::compat::ThreadID caller_id = OS::get_singleton()->get_thread_caller_id();
     {
-        MutexLock shadow_lock(shadow_mutex_);
+        std::lock_guard shadow_lock(shadow_mutex_);
 
         for (ShadowEnvironment& shadow : shadow_environments_)
         {
@@ -625,16 +611,16 @@ std::shared_ptr<jsb::Environment> GodotJSScriptLanguage::create_shadow_environme
     params.initial_object_slots = 512;
     params.initial_script_slots = 32;
     params.type = jsb::Environment::Type::Shadow;
-    params.thread_id = Thread::UNASSIGNED_ID;
+    params.thread_id = jsb::compat::UNASSIGNED_THREAD_ID;
 
     std::shared_ptr<jsb::Environment> env = std::make_shared<jsb::Environment>(params);
     JSB_LOG(Log, "creating a shadow Environment on thread %d for %s [env %s]",
-        Thread::get_caller_id(),
+        OS::get_singleton()->get_thread_caller_id(),
         jsb_typename(GodotJSScript),
         (uintptr_t) env->id());
     env->init();
     {
-        MutexLock shadow_lock(shadow_mutex_);
+        std::lock_guard shadow_lock(shadow_mutex_);
         shadow_environments_.push_back({caller_id, env, 1});
     }
     return env;
@@ -645,7 +631,7 @@ void GodotJSScriptLanguage::destroy_shadow_environment(const std::shared_ptr<jsb
     bool found = false;
     bool should_dispose = false;
     {
-        MutexLock shadow_lock(shadow_mutex_);
+        std::lock_guard shadow_lock(shadow_mutex_);
         const size_t num = shadow_environments_.size();
         for (auto it = shadow_environments_.begin();
             it != shadow_environments_.end();
@@ -673,7 +659,7 @@ void GodotJSScriptLanguage::reload_scripts_internal(const Array& p_scripts, bool
 
 	List<Ref<GodotJSScript>> scripts;
 	{
-		MutexLock lock(mutex_);
+		std::lock_guard lock(mutex_);
 
 		SelfList<GodotJSScript> *elem = script_list_.first();
 		while (elem) {
@@ -687,7 +673,7 @@ void GodotJSScriptLanguage::reload_scripts_internal(const Array& p_scripts, bool
 
 	//when someone asks you why dynamically typed languages are easier to write....
 
-	HashMap<Ref<GodotJSScript>, HashMap<ObjectID, List<Pair<StringName, Variant>>>> to_reload;
+	HashMap<Ref<GodotJSScript>, HashMap<ObjectInstanceID, ScriptInstancePropertyState>> to_reload;
 
 	//as scripts are going to be reloaded, must proceed without locking here
 
@@ -700,70 +686,90 @@ void GodotJSScriptLanguage::reload_scripts_internal(const Array& p_scripts, bool
 			continue;
 		}
 
-		to_reload.insert(scr, HashMap<ObjectID, List<Pair<StringName, Variant>>>());
+		to_reload.insert(scr, HashMap<ObjectInstanceID, ScriptInstancePropertyState>());
 
 		if (!p_soft_reload) {
 			//save state and remove script from instances
-			HashMap<ObjectID, List<Pair<StringName, Variant>>> &map = to_reload[scr];
+			HashMap<ObjectInstanceID, ScriptInstancePropertyState> &map = to_reload[scr];
 
 			while (scr->instances_.front()) {
 				Object *obj = scr->instances_.front()->get();
-				//save instance info
-				List<Pair<StringName, Variant>> state;
-				if (obj->get_script_instance()) {
-					obj->get_script_instance()->get_property_state(state);
-					map[obj->get_instance_id()] = state;
-					obj->set_script(Variant());
+				if (ScriptInstance* si = ScriptInstance::get_script_instance(obj)) {
+                    //save instance info
+                    ScriptInstancePropertyState state;
+                    si->get_property_state(state);
+					map.insert(obj->get_instance_id(), state);
+
+					obj->set_script(Variant()); // NOTE: 脚本改变时会在 godot 侧释放旧的 script_instance.
 				}
 			}
 
-			//same thing for placeholders
 #ifdef TOOLS_ENABLED
+			//same thing for placeholders
+            while (!scr->placeholders.is_empty()) {
+                auto size = scr->placeholders.size();
+                Object *obj = scr->placeholders[size - 1]->get_owner();
+                if (ScriptInstance* si = ScriptInstance::get_script_instance(obj)) {
+                    //save instance info
+                    ScriptInstancePropertyState state;
+                    si->get_property_state(state);
+					map.insert(obj->get_instance_id(), state);
 
-			while (scr->placeholders.size()) {
-				Object *obj = (*scr->placeholders.begin())->get_owner();
-
-				//save instance info
-				if (obj->get_script_instance()) {
-					map.insert(obj->get_instance_id(), List<Pair<StringName, Variant>>());
-					List<Pair<StringName, Variant>> &state = map[obj->get_instance_id()];
-					obj->get_script_instance()->get_property_state(state);
-					obj->set_script(Variant());
-				} else {
-					// no instance found. Let's remove it so we don't loop forever
-					scr->placeholders.erase(*scr->placeholders.begin());
-				}
-			}
+					obj->set_script(Variant()); // NOTE: 脚本改变时会在 godot 侧释放旧的 script_instance.
+                } else {
+                    scr->placeholders.resize(size - 1);
+                }
+            }
 
 #endif // TOOLS_ENABLED
 
-			for (const KeyValue<ObjectID, List<Pair<StringName, Variant>>> &F : scr->pending_reload_state_) {
+			for (const KeyValue<ObjectInstanceID, ScriptInstancePropertyState> &F : scr->pending_reload_state_) {
 				map[F.key] = F.value; //pending to reload, use this one instead
 			}
 		}
 	}
 
-	for (KeyValue<Ref<GodotJSScript>, HashMap<ObjectID, List<Pair<StringName, Variant>>>> &E : to_reload) {
+	for (KeyValue<Ref<GodotJSScript>, HashMap<ObjectInstanceID, ScriptInstancePropertyState>> &E : to_reload) {
 		Ref<GodotJSScript> scr = E.key;
-		print_verbose("GodotJSScript: Reloading: " + scr->get_path());
+        const String scr_path = scr->get_path();
+		print_verbose("GodotJSScript: Reloading: " + scr_path);
 		if (scr->is_built_in()) {
 			// TODO: It would be nice to do it more efficiently than loading the whole scene again.
-			Ref<PackedScene> scene = ResourceLoader::load(scr->get_path().get_slice("::", 0), "", ResourceFormatLoader::CACHE_MODE_IGNORE_DEEP);
+			Ref<PackedScene> scene = ResourceLoader::get_singleton()->load(scr_path.get_slice("::", 0), "", ResourceLoader::CACHE_MODE_IGNORE_DEEP);
 			ERR_CONTINUE(scene.is_null());
 
-			Ref<SceneState> state = scene->get_state();
-			Ref<GodotJSScript> fresh = state->get_sub_resource(scr->get_path());
+            auto get_subresource_script =  [] (const Ref<PackedScene> &p_scene, const String &p_path) -> Ref<GodotJSScript> {
+                Ref<SceneState> state = p_scene->get_state();
+                int32_t node_count = state->get_node_count();
+                for (int32_t node_idx = 0; node_idx < node_count; ++node_idx)
+                {
+                    int32_t property_count = state->get_node_property_count(node_idx);
+                    for (int32_t property_idx = 0; property_idx < property_count; ++property_idx)
+                    {
+                        if (GodotJSScript* maybe_resources = Object::cast_to<GodotJSScript>(state->get_node_property_value(node_idx, property_idx).get_validated_object()))
+                        {
+                            if (maybe_resources->get_path() == p_path)
+                            {
+                                return maybe_resources;
+                            }
+                        }
+                    }
+                }
+                return Ref<GodotJSScript>();
+            };
+
+            Ref<GodotJSScript> fresh = get_subresource_script(scene, scr_path);
 			ERR_CONTINUE(fresh.is_null());
 
-			scr->set_source_code(fresh->get_source_code());
+			scr->load_source_code(scr_path);
 		} else {
-			scr->load_source_code(scr->get_path());
+			scr->load_source_code(scr_path);
 		}
 		scr->reload(p_soft_reload);
 
 		//restore state if saved
-		for (KeyValue<ObjectID, List<Pair<StringName, Variant>>> &F : E.value) {
-			List<Pair<StringName, Variant>> &saved_state = F.value;
+		for (KeyValue<ObjectInstanceID, ScriptInstancePropertyState> &F : E.value) {
+			ScriptInstancePropertyState &saved_state = F.value;
 
 			Object *obj = ObjectDB::get_instance(F.key);
 			if (!obj) {
@@ -776,9 +782,8 @@ void GodotJSScriptLanguage::reload_scripts_internal(const Array& p_scripts, bool
 			}
 			obj->set_script(scr);
 
-			ScriptInstance *script_inst = obj->get_script_instance();
-
-			if (!script_inst) {
+            ScriptInstance* script_instance = ScriptInstance::get_script_instance(obj);
+			if (script_instance == nullptr) {
 				//failed, save reload state for next time if not saved
 				if (!scr->pending_reload_state_.has(obj->get_instance_id())) {
 					scr->pending_reload_state_[obj->get_instance_id()] = saved_state;
@@ -786,15 +791,16 @@ void GodotJSScriptLanguage::reload_scripts_internal(const Array& p_scripts, bool
 				continue;
 			}
 
-			if (script_inst->is_placeholder() && scr->is_placeholder_fallback_enabled()) {
-				PlaceHolderScriptInstance *placeholder = static_cast<PlaceHolderScriptInstance *>(script_inst);
-				for (List<Pair<StringName, Variant>>::Element *G = saved_state.front(); G; G = G->next()) {
-					placeholder->property_set_fallback(G->get().first, G->get().second);
+			if (script_instance->is_placeholder() && scr->_is_placeholder_fallback_enabled()) {
+				PlaceholderScriptInstance *placeholder = static_cast<PlaceholderScriptInstance *>(script_instance);
+                for (const auto & G: saved_state) {
+					// placeholder->property_set_fallback(G.first, G.second); // TODO: Godot 未暴露接口
 				}
 			} else {
-				for (List<Pair<StringName, Variant>>::Element *G = saved_state.front(); G; G = G->next()) {
-					script_inst->set(G->get().first, G->get().second);
-				}
+                GodotJSScriptInstanceBase *si = static_cast<GodotJSScriptInstanceBase*>(script_instance);
+                for (const auto & G: saved_state) {
+                    si->set(G.first, G.second);
+                }
 			}
 
 			scr->pending_reload_state_.erase(obj->get_instance_id()); //as it reloaded, remove pending state

@@ -1,8 +1,6 @@
 #include "jsb_debugger.h"
 #include "jsb_environment.h"
-#include "core/config/project_settings.h"
-#include "core/io/file_access.h"
-#include "core/io/tcp_server.h"
+#include <godot_cpp/classes/stream_peer_buffer.hpp>
 
 #if JSB_WITH_DEBUGGER
 #if JSB_WITH_LWS && JSB_WITH_V8
@@ -111,7 +109,10 @@ namespace jsb
                 recv_buffer_->resize(new_len);
             }
 
-            recv_buffer_->put_data(p_buf, (int) p_len);
+            PackedByteArray recv_data;
+            recv_data.resize((int) p_len);
+            memcpy(recv_data.ptrw(), p_buf, p_len);
+            recv_buffer_->put_data(recv_data);
             if (lws_is_final_fragment(wsi_))
             {
                 const bool is_binary = lws_frame_is_binary(wsi_) == 1;
@@ -193,7 +194,10 @@ namespace jsb
             buffer.instantiate();
             buffer->resize(rlen);
             buffer->seek(LWS_PRE);
-            buffer->put_data(p_buf, (int) p_len);
+            PackedByteArray send_data;
+            send_data.resize((int) p_len);
+            memcpy(send_data.ptrw(), p_buf, p_len);
+            buffer->put_data(send_data);
             jsb_check((int) p_len + LWS_PRE == buffer->get_position());
             _send_queue.append(buffer);
             lws_callback_on_writable(wsi_);
@@ -475,7 +479,7 @@ namespace jsb
 
                         String res_path = "res://" + uri.trim_prefix("/");
 
-                        if (!FileAccess::exists(res_path))
+                        if (!FileAccess::file_exists(res_path))
                         {
                             JSB_DEBUGGER_LOG(Verbose, "Source file not found: %s", res_path);
                             lws_return_http_status(wsi, HTTP_STATUS_NOT_FOUND, "Not Found");

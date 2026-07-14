@@ -99,8 +99,8 @@ namespace jsb::tests
 
             CHECK(ProjectSettings::get_singleton()->setup(p_base_path, String(), true) == OK);
             CHECK(OS::get_singleton()->set_cwd(p_base_path) == OK);
-            CHECK(FileAccess::exists("project.godot"));
-            // MESSAGE("init GodotJSScriptLanguage on thread ", Thread::get_caller_id());
+            CHECK(FileAccess::file_exists("project.godot"));
+            // MESSAGE("init GodotJSScriptLanguage on thread ", OS::get_singleton()->get_thread_caller_id());
 
             check_required_files();
             GodotJSScriptLanguage::get_singleton()->init();
@@ -114,10 +114,10 @@ namespace jsb::tests
     private:
         void check_required_files()
         {
-        	CHECK(FileAccess::exists("./package.json"));
-        	CHECK(FileAccess::exists("./tsconfig.json"));
-            CHECK(FileAccess::exists("./test_01.ts"));
-            CHECK(FileAccess::exists("./.godot/GodotJS/test_01.js"));
+        	CHECK(FileAccess::file_exists("./package.json"));
+        	CHECK(FileAccess::file_exists("./tsconfig.json"));
+            CHECK(FileAccess::file_exists("./test_01.ts"));
+            CHECK(FileAccess::file_exists("./.godot/GodotJS/test_01.js"));
         }
     };
 

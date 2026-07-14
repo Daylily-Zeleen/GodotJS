@@ -4,10 +4,15 @@
 #include "../bridge/jsb_callable.h"
 #include "../bridge/jsb_type_convert.h"
 #include "../weaver/jsb_script.h"
+#include "../weaver/jsb_script_instance.h"
 
-#include "editor/gui/editor_toaster.h"
-#include "scene/animation/animation_mixer.h"
-#include "scene/resources/packed_scene.h"
+#include <godot_cpp/classes/animation_mixer.hpp>
+#include <godot_cpp/classes/animation_library.hpp>
+#include <godot_cpp/classes/editor_interface.hpp>
+#include <godot_cpp/classes/editor_toaster.hpp>
+#include <godot_cpp/classes/resource_loader.hpp>
+#include <godot_cpp/classes/resource_format_loader.hpp>
+
 
 // The following enums must be kept in sync with jsb.editor.codegen.ts
 enum class CodeGenType {
@@ -128,8 +133,11 @@ Dictionary GodotJSEditorHelper::_build_node_type_descriptor(const BitField<Scene
         }
     }
 
-    ScriptInstance* script_instance = p_node->get_script_instance();
-    GodotJSScript* script = script_instance != nullptr ? Object::cast_to<GodotJSScript>(*script_instance->get_script()) : nullptr;
+    GodotJSScript* script = nullptr;
+    if (ScriptInstance* script_instance = ScriptInstance::get_script_instance(p_node))
+    {
+        script = script_instance->get_script().ptr();
+    }
 
     if (script != nullptr)
     {
@@ -168,8 +176,7 @@ Dictionary GodotJSEditorHelper::_build_node_type_descriptor(const BitField<Scene
 
             if (animation_mixer)
             {
-                LocalVector<StringName> library_names;
-                animation_mixer->get_animation_library_list(&library_names);
+                TypedArray<StringName> library_names = animation_mixer->get_animation_library_list();
 
                 Dictionary animation_libraries_object_literal;
                 Dictionary animation_libraries_properties;
@@ -182,8 +189,7 @@ Dictionary GodotJSEditorHelper::_build_node_type_descriptor(const BitField<Scene
 
                     Array animation_names_union_array;
 
-                    LocalVector<StringName> animation_names;
-                    library->get_animation_list(&animation_names);
+                    TypedArray<StringName> animation_names = library->get_animation_list();
 
                     for (const StringName& animation_name : animation_names)
                     {
@@ -212,7 +218,7 @@ Dictionary GodotJSEditorHelper::_build_node_type_descriptor(const BitField<Scene
             }
 
             descriptor[jsb_string_name(type)] = (int32_t) DescriptorType::Godot;
-            descriptor[jsb_string_name(name)] = GodotJSEditorHelper::_get_exposed_node_class_name(p_node->get_class_name());
+            descriptor[jsb_string_name(name)] = GodotJSEditorHelper::_get_exposed_node_class_name(p_node->get_class());
             descriptor[jsb_string_name(arguments)] = generic_arguments;
         }
         else
@@ -228,7 +234,7 @@ Dictionary GodotJSEditorHelper::_build_node_type_descriptor(const BitField<Scene
     {
         Variant arguments_var = descriptor[jsb_string_name(arguments)];
 
-        if (arguments_var.is_array())
+        if (arguments_var.get_type() == Variant::ARRAY)
         {
             Array arguments = arguments_var;
             int argument_count = arguments.size();
@@ -327,12 +333,11 @@ void GodotJSEditorHelper::_bind_methods()
 Dictionary GodotJSEditorHelper::get_resource_type_descriptor(const String& p_path)
 {
     Dictionary descriptor;
-    Error err;
-    Ref<Resource> resource = ResourceLoader::load(p_path, "", ResourceFormatLoader::CACHE_MODE_REUSE, &err);
+    Ref<Resource> resource = ResourceLoader::get_singleton()->load(p_path, "", ResourceLoader::CACHE_MODE_REUSE);
 
     if (resource.is_null())
     {
-        _log_load_error(p_path, "Resource", err);
+        _log_load_error(p_path, "Resource", FileAccess::file_exists(p_path) ? ERR_FILE_UNRECOGNIZED : ERR_FILE_NOT_FOUND);
         return descriptor;
     }
 
@@ -367,8 +372,11 @@ Dictionary GodotJSEditorHelper::get_resource_type_descriptor(const String& p_pat
         return descriptor;
     }
 
-    ScriptInstance* script_instance = resource->get_script_instance();
-    GodotJSScript* script = script_instance != nullptr ? Object::cast_to<GodotJSScript>(*script_instance->get_script()) : nullptr;
+    GodotJSScript* script = nullptr;
+    if (ScriptInstance* script_instance = ScriptInstance::get_script_instance(resource.ptr()))
+    {
+        script = script_instance->get_script().ptr();
+    }
 
     if (script != nullptr)
     {
@@ -387,13 +395,13 @@ Dictionary GodotJSEditorHelper::get_resource_type_descriptor(const String& p_pat
     if (script == nullptr || GodotJSScriptLanguage::get_singleton()->is_global_class_generic(script->get_path()))
     {
         descriptor[jsb_string_name(type)] = (int32_t) DescriptorType::Godot;
-        descriptor[jsb_string_name(name)] = GodotJSEditorHelper::_get_exposed_node_class_name(resource->get_class_name());
+        descriptor[jsb_string_name(name)] = GodotJSEditorHelper::_get_exposed_node_class_name(resource->get_class());
     }
     else
     {
-        String class_name = script->is_valid()
+        String class_name = script->_is_valid()
             ? static_cast<String>(script->get_global_name())
-            : ResourceLoader::get_resource_script_class(p_path);
+            : resource->get_class(); // GDExtension: ResourceLoader::get_resource_script_class not available
 
         if (class_name.is_empty())
         {
@@ -413,12 +421,11 @@ Dictionary GodotJSEditorHelper::get_resource_type_descriptor(const String& p_pat
 
 Dictionary GodotJSEditorHelper::get_scene_nodes(const String& p_path)
 {
-    Error err;
-    Ref<PackedScene> scene_data = ResourceLoader::load(p_path, "", ResourceFormatLoader::CACHE_MODE_REPLACE, &err);
+    Ref<PackedScene> scene_data = ResourceLoader::get_singleton()->load(p_path, "", ResourceLoader::CACHE_MODE_REPLACE);
 
     if (scene_data.is_null())
     {
-        _log_load_error(p_path, "Resource", err);
+        _log_load_error(p_path, "Resource", FileAccess::file_exists(p_path) ? ERR_FILE_UNRECOGNIZED : ERR_FILE_NOT_FOUND);
         return Dictionary();
     }
 
@@ -463,5 +470,8 @@ Dictionary GodotJSEditorHelper::get_scene_nodes(const String& p_path)
 
 void GodotJSEditorHelper::show_toast(const String& p_text, int p_severity)
 {
-    EditorToaster::get_singleton()->popup_str(p_text, (EditorToaster::Severity) p_severity);
+    if (EditorToaster* toaster = EditorInterface::get_singleton()->get_editor_toaster())
+    {
+        toaster->push_toast(p_text, (EditorToaster::Severity) p_severity);
+    }
 }

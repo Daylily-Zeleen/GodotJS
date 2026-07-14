@@ -4,7 +4,7 @@
 #include "jsb_v8_pch.h"
 #include "../../internal/jsb_settings.h"
 
-#define V8_VERSION_NEWER_THAN(major, minor, patch) GODOT_VERSION_COMPARE(V8_MAJOR_VERSION, major, GODOT_VERSION_COMPARE(V8_MINOR_VERSION, minor, GODOT_VERSION_COMPARE(V8_BUILD_VERSION, patch, false)))
+#define V8_VERSION_NEWER_THAN(major, minor, patch) VERSION_COMPARE(V8_MAJOR_VERSION, major, VERSION_COMPARE(V8_MINOR_VERSION, minor, VERSION_COMPARE(V8_BUILD_VERSION, patch, false)))
 
 namespace jsb::impl
 {
@@ -27,7 +27,7 @@ namespace jsb::impl
         {
             const size_t size = array_buffer->ByteLength();
             PackedByteArray packed;
-            const Error err = packed.resize((int) size);
+            const godot::Error err = (godot::Error)packed.resize((int) size);
             jsb_unused(err);
             jsb_check(err == OK);
             const void* data = array_buffer->Data();
@@ -35,7 +35,8 @@ namespace jsb::impl
             return packed;
         }
 
-        static v8::Local<v8::ArrayBuffer> to_array_buffer(v8::Isolate* isolate, const Vector<uint8_t>& packed)
+        template<typename PackedTy, typename std::enable_if_t<sizeof(decltype(*PackedTy().ptr())) == sizeof(uint8_t)>* = nullptr> // Vector<uint8_t> or PackedByteArray
+        static v8::Local<v8::ArrayBuffer> to_array_buffer(v8::Isolate* isolate, const PackedTy& packed)
         {
             const v8::Local<v8::ArrayBuffer> buffer = v8::ArrayBuffer::New(isolate, packed.size());
             void* data = buffer->Data();

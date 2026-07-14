@@ -2,6 +2,13 @@
 #define GODOTJS_REPL_H
 #include "jsb_editor_pch.h"
 
+#include <godot_cpp/classes/h_box_container.hpp>
+#include <godot_cpp/classes/line_edit.hpp>
+#include <godot_cpp/classes/rich_text_label.hpp>
+#include <godot_cpp/classes/button.hpp>
+#include <godot_cpp/classes/label.hpp>
+#include <godot_cpp/classes/item_list.hpp>
+
 class GodotJSREPL : public HBoxContainer, public jsb::internal::IConsoleOutput
 {
     GDCLASS(GodotJSREPL, HBoxContainer)
@@ -28,12 +35,13 @@ private:
     Vector<OutputLine> lines_;
 
     enum { kMaxHistoryCount = 10 };
-    Vector<String> history_;
+    PackedStringArray history_;
 
     jsb::internal::DoubleBuffered<String> output_backlog_;
     StringName sn_backlog_flush_;
 
 private:
+    Ref<Texture2D> get_editor_theme_icon(const StringName &p_name) const;
     void _update_theme();
 
 protected:
@@ -49,7 +57,7 @@ protected:
     void _install_project_files_pressed();
     void _start_tsc_pressed();
     void _notification(int p_what);
-    void _show_candidates(const Vector<String>& p_items);
+    void _show_candidates(const PackedStringArray& p_items);
     void _backlog_flush();
 
     void add_string(const String& p_str);

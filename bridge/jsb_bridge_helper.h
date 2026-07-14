@@ -1,5 +1,6 @@
 #ifndef GODOTJS_BRIDGE_HELPER_H
 #define GODOTJS_BRIDGE_HELPER_H
+#include "gen/core_constants.gen.h"
 #include "jsb_bridge_pch.h"
 #include "jsb_type_convert.h"
 

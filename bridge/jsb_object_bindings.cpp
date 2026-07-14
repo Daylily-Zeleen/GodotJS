@@ -24,7 +24,9 @@ namespace jsb
 
         jsb_check(p_class_info);
 
-        const StringName &gd_class_name = p_class_info->gdtype->get_name();
+        // TODO: 不要直接使用 ClassDB::ClassInfo
+        // GDExtension: ClassDB::ClassInfo has no gdtype field. Use name directly.
+        const StringName &gd_class_name = p_class_info->name;
 
         String class_name = internal::NamingUtil::get_class_name(gd_class_name);
         const NativeClassID class_id = p_env->add_native_class(NativeClassType::GodotObject, class_name);
@@ -32,6 +34,7 @@ namespace jsb
 
         // construct type template
         {
+            ClassDBSingleton* classdb = ClassDBSingleton::get_singleton();
 
             impl::ClassBuilder class_builder = ObjectTemplate::create(p_env, class_id);
 
@@ -104,38 +107,53 @@ namespace jsb
              }
 
              // class: signals
-             for (const KeyValue<StringName, const MethodInfo*>& pair : p_class_info->gdtype->get_signal_map(true))
              {
-                 v8::HandleScope handle_scope_for_signal(isolate);
-                 String signal_name = internal::NamingUtil::get_member_name(pair.key);
-                 const v8::Local<v8::String> signal_name_js = p_env->get_string_name_cache().get_string_value(isolate, pair.key);
-                 class_builder.Instance().Property(signal_name, _godot_object_signal_get, signal_name_js.As<v8::Value>());
+                 TypedArray<Dictionary> signal_list = classdb->class_get_signal_list(gd_class_name, true);
+                 for (int i = 0; i < signal_list.size(); i++)
+                 {
+                     Dictionary signal_dict = signal_list[i];
+                     StringName signal_name_sn = signal_dict["name"];
+                     String signal_name = internal::NamingUtil::get_member_name(signal_name_sn);
+                     const v8::Local<v8::String> signal_name_js = p_env->get_string_name_cache().get_string_value(isolate, signal_name_sn);
+                     class_builder.Instance().Property(signal_name, _godot_object_signal_get, signal_name_js.As<v8::Value>());
+                 }
              }
 
              HashSet<StringName> enum_consts;
 
              // class: enum (nested in class)
-             for (const KeyValue<StringName, const GDType::EnumInfo*>& pair : p_class_info->gdtype->get_enum_map(true))
              {
-                 v8::HandleScope handle_scope_for_enum(isolate);
-                 impl::ClassBuilder::EnumDeclaration enumeration = static_builder.Enum(internal::NamingUtil::get_enum_name(pair.key));
-                 for (const KeyValue<StringName, int64_t>& enum_value : pair.value->values)
+                 PackedStringArray enum_list = classdb->class_get_enum_list(gd_class_name, true);
+                 for (int i = 0; i < enum_list.size(); i++)
                  {
-                     const String& js_enum_name = internal::NamingUtil::get_enum_value_name(enum_value.key);
-                     jsb_not_implemented(js_enum_name.contains("."), "hierarchically nested definition is currently not supported");
-                     enumeration.Value(js_enum_name, enum_value.value);
-                     enum_consts.insert(enum_value.key);
+                     StringName enum_name = enum_list[i];
+                     impl::ClassBuilder::EnumDeclaration enumeration = static_builder.Enum(internal::NamingUtil::get_enum_name(enum_name));
+                     PackedStringArray enum_constants_list = classdb->class_get_enum_constants(gd_class_name, enum_name, true);
+                     for (int j = 0; j < enum_constants_list.size(); j++)
+                     {
+                         StringName constant_name = enum_constants_list[j];
+                         int64_t constant_value = classdb->class_get_integer_constant(gd_class_name, constant_name);
+                         const String& js_enum_name = internal::NamingUtil::get_enum_value_name(constant_name);
+                         jsb_not_implemented(js_enum_name.contains("."), "hierarchically nested definition is currently not supported");
+                         enumeration.Value(js_enum_name, constant_value);
+                         enum_consts.insert(constant_name);
+                     }
                  }
              }
 
              // class: constants
-             for (const KeyValue<StringName, int64_t>& pair : p_class_info->gdtype->get_integer_constant_map(true))
              {
-                 if (enum_consts.has(pair.key)) continue;
-                 const String& js_const_name = (String) internal::NamingUtil::get_constant_name(pair.key);
-                 jsb_not_implemented(js_const_name.contains("."), "hierarchically nested definition is currently not supported");
+                 PackedStringArray constant_list = classdb->class_get_integer_constant_list(gd_class_name, true);
+                 for (int i = 0; i < constant_list.size(); i++)
+                 {
+                     StringName constant_name = constant_list[i];
+                     if (enum_consts.has(constant_name)) continue;
+                     const String& js_const_name = (String) internal::NamingUtil::get_constant_name(constant_name);
+                     jsb_not_implemented(js_const_name.contains("."), "hierarchically nested definition is currently not supported");
 
-                 static_builder.Value(pair.key, pair.value);
+                     int64_t constant_value = classdb->class_get_integer_constant(gd_class_name, constant_name);
+                     static_builder.Value(constant_name, constant_value);
+                 }
              }
 
             // set `class_id` on the exposed godot native class for the convenience when finding it from any subclasses in javascript.
@@ -186,19 +204,19 @@ namespace jsb
         if (!pointer)
         {
             const String error_message = jsb_errorf("failure obtaining signal: %s. signal owner is undefined or dead.", gd_signal_name);
-            impl::Helper::throw_error(isolate, error_message);
+            jsb_throw(isolate, error_message);
             return;
         }
 
         // signal must be instance-owned
-        const Object* gd_object = (Object*) pointer;
+        Object* gd_object = (Object*) pointer;
         if (v8::Local<v8::Value> rval; TypeConvert::gd_var_to_js(isolate, context, Signal(gd_object, gd_signal_name), rval))
         {
             info.GetReturnValue().Set(rval);
             return;
         }
         const String error_message = jsb_errorf("failure obtaining signal: %s. bad signal", gd_signal_name);
-        impl::Helper::throw_error(isolate, error_message);
+        jsb_throw(isolate, error_message);
     }
 
     void ObjectReflectBindingUtil::_godot_object_cached_export_update(const v8::FunctionCallbackInfo<v8::Value>& info)
@@ -222,10 +240,7 @@ namespace jsb
 
         const StringName property_name = environment->get_string_name_cache().get_string_name(isolate, info.Data().As<v8::String>());
 
-        jsb_check(((Object*) pointer)->get_script_instance()->get_language() == GodotJSScriptLanguage::get_singleton());
-
-        GodotJSScriptInstance* script_instance = (GodotJSScriptInstance*) ((Object*) pointer)->get_script_instance();
-
+        GodotJSScriptInstance *script_instance = ScriptInstance::get_script_instance<GodotJSScriptInstance>((Object *)pointer);
         if (!script_instance)
         {
             // Again, this could conceivably occur during construction. Safe to ignore.
@@ -246,7 +261,7 @@ namespace jsb
             if (get_result.IsEmpty())
             {
                 const String error_message = jsb_errorf("failure setting cached export: %s. failed to get latest value", property_name);
-                impl::Helper::throw_error(isolate, error_message);
+                jsb_throw(isolate, error_message);
                 return;
             }
 
@@ -258,7 +273,7 @@ namespace jsb
         if (!TypeConvert::js_to_gd_var(isolate, context, js_value, gd_value))
         {
             const String error_message = jsb_errorf("failure setting cached export: %s. failed to convert value to a variant", property_name);
-            impl::Helper::throw_error(isolate, error_message);
+            jsb_throw(isolate, error_message);
             return;
         }
 
@@ -276,10 +291,11 @@ namespace jsb
             return;
         }
 
-        Callable::CallError err;
-        const Variant dummy = gd_object->callp(jsb_string_name(free), nullptr, 0, err);
+        Variant dummy;
+        GDExtensionCallError err;
+        Variant(gd_object).callp(jsb_string_name(free), nullptr, 0, dummy, err);
         jsb_check(dummy.get_type() == Variant::NIL);
-        if (jsb_unlikely(err.error != Callable::CallError::CALL_OK))
+        if (jsb_unlikely(err.error != GDEXTENSION_CALL_OK))
         {
             jsb_throw(isolate, "bad free");
             return;
@@ -297,7 +313,7 @@ namespace jsb
         if (!method_info.check_argc(argc))
         {
             const String error_message = jsb_errorf("%d arguments are required", method_info.argument_types.size());
-            impl::Helper::throw_error(isolate, error_message);
+            jsb_throw(isolate, error_message);
             return;
         }
         const Variant** argv = jsb_stackalloc(const Variant*, argc);
@@ -316,7 +332,7 @@ namespace jsb
                     ? jsb_errorf("Bad argument: %d. Unable to convert JS %s to Godot %s", index, TypeConvert::js_debug_typeof(isolate, info[index]), Variant::get_type_name(method_info.argument_types[index]))
                     : jsb_errorf("Bad argument: %d. Unable to convert JS %s", index, TypeConvert::js_debug_typeof(isolate, info[index]));
                 while (index >= 0) { args[index--].~Variant(); }
-                impl::Helper::throw_error(isolate, error_message);
+                jsb_throw(isolate, error_message);
                 return;
             }
         }
@@ -338,7 +354,7 @@ namespace jsb
             return;
         }
         const String error_message = jsb_errorf("Failed to translate returned Godot %s to a JS value", Variant::get_type_name(crval.get_type()));
-        impl::Helper::throw_error(isolate, error_message);
+        jsb_throw(isolate, error_message);
     }
 
     void ObjectReflectBindingUtil::_godot_object_method(const v8::FunctionCallbackInfo<v8::Value>& info)
@@ -357,7 +373,7 @@ namespace jsb
             if (!TypeConvert::js_to_gd_obj(isolate, context, info.This(), gd_object) || !gd_object)
             {
                 const String error_message = jsb_errorf("Failed to call: %s. Bad this", method_bind->get_name());
-                impl::Helper::throw_error(isolate, error_message);
+                jsb_throw(isolate, error_message);
                 return;
             }
         }
@@ -369,7 +385,7 @@ namespace jsb
         if (!internal::VariantUtil::check_argc(method_is_vararg, argc, method_bind->get_default_argument_count(), method_argc))
         {
             const String error_message = jsb_errorf("Failed to call: %s. %d arguments are required", method_bind->get_name(), method_argc - method_bind->get_default_argument_count());
-            impl::Helper::throw_error(isolate, error_message);
+            jsb_throw(isolate, error_message);
             return;
         }
         const Variant** argv = jsb_stackalloc(const Variant*, argc);
@@ -380,7 +396,7 @@ namespace jsb
             argv[index] = &args[index];
             const Variant::Type type = index >= method_argc
                 ? Variant::Type::NIL
-                : method_bind->get_argument_type(index);
+                : (Variant::Type) method_bind->get_argument_type(index);
 
             const v8::Local<v8::Value>& argument = info[index];
 
@@ -393,14 +409,14 @@ namespace jsb
                 // revert all constructors
                 const String error_message = jsb_errorf("Failed to call: %s. Bad argument: %d. Unable to convert JS %s to Godot %s", method_bind->get_name(), index, TypeConvert::js_debug_typeof(isolate, info[index]), Variant::get_type_name(type));
                 while (index >= 0) { args[index--].~Variant(); }
-                impl::Helper::throw_error(isolate, error_message);
+                jsb_throw(isolate, error_message);
                 return;
             }
         }
 
         // call godot method
-        Callable::CallError error;
-        Variant crval = method_bind->call(gd_object, argv, argc, error);
+        GDExtensionCallError error;
+        Variant crval = method_bind->call(gd_object, (const GDExtensionConstVariantPtr*) argv, argc, error);
 
         // don't forget to destruct all stack allocated variants
         for (int index = 0; index < argc; ++index)
@@ -408,15 +424,15 @@ namespace jsb
             args[index].~Variant();
         }
 
-        if (error.error != Callable::CallError::CALL_OK)
+        if (error.error != GDEXTENSION_CALL_OK)
         {
             const String error_message = jsb_errorf("Failed to call: %s", method_bind->get_name());
-            impl::Helper::throw_error(isolate, error_message);
+            jsb_throw(isolate, error_message);
             return;
         }
         v8::Local<v8::Value> jrval;
-        const Variant::Type return_type = sanitize_return_type(method_bind->get_argument_type(-1), crval);
-        jsb_check(return_type == method_bind->get_return_info().type);
+        const Variant::Type return_type = sanitize_return_type((Variant::Type) method_bind->get_argument_type(-1), crval);
+        jsb_check(return_type == method_bind->get_argument_type(-1)); // TODO: 假定 -1 是返回值
         if (TypeConvert::gd_var_to_js(isolate, context, crval, return_type, jrval))
         {
             info.GetReturnValue().Set(jrval);
@@ -427,7 +443,7 @@ namespace jsb
             "Failed to translate returned Godot %s to a JS value",
             method_bind->get_name(),
             Variant::get_type_name(crval.get_type()));
-        impl::Helper::throw_error(isolate, error_message);
+        jsb_throw(isolate, error_message);
     }
 
     void ObjectReflectBindingUtil::_godot_object_get2(const v8::FunctionCallbackInfo<v8::Value>& info)
@@ -442,7 +458,7 @@ namespace jsb
         if (info.Length() != 0)
         {
             const String error_message = jsb_errorf("Failed to get property: %s. Arguments unexpectedly provided", property_info.getter_func->get_name());
-            impl::Helper::throw_error(isolate, error_message);
+            jsb_throw(isolate, error_message);
             return;
         }
 
@@ -450,26 +466,26 @@ namespace jsb
         if (!property_info.getter_func->is_static() && (!TypeConvert::js_to_gd_obj(isolate, context, info.This(), gd_object) || !gd_object))
         {
             const String error_message = jsb_errorf("Failed to get property: %s. Bad this", property_info.getter_func->get_name());
-            impl::Helper::throw_error(isolate, error_message);
+            jsb_throw(isolate, error_message);
             return;
         }
 
         Variant args[] = { property_info.index };
-        const Variant* argv[] = { &args[0] };
+        const GDExtensionConstVariantPtr argv[] = { (const GDExtensionConstVariantPtr) &args[0] };
 
         // call godot method
-        Callable::CallError error;
+        GDExtensionCallError error;
         Variant crval = property_info.getter_func->call(gd_object, argv, ::std::size(argv), error);
 
-        if (error.error != Callable::CallError::CALL_OK)
+        if (error.error != GDEXTENSION_CALL_OK)
         {
             const String error_message = jsb_errorf("Failed to get property: %s. Execution failed", property_info.getter_func->get_name());
-            impl::Helper::throw_error(isolate, error_message);
+            jsb_throw(isolate, error_message);
             return;
         }
         v8::Local<v8::Value> jrval;
-        const Variant::Type return_type = sanitize_return_type(property_info.getter_func->get_argument_type(-1), crval);
-        jsb_check(return_type == property_info.getter_func->get_return_info().type);
+        const Variant::Type return_type = sanitize_return_type((Variant::Type) property_info.getter_func->get_argument_type(-1), crval);
+        jsb_check(return_type == property_info.getter_func->get_argument_type(-1));
         if (TypeConvert::gd_var_to_js(isolate, context, crval, return_type, jrval))
         {
             info.GetReturnValue().Set(jrval);
@@ -477,7 +493,7 @@ namespace jsb
         }
         const String error_message = jsb_errorf("Failed to get property: %s. Failed to translate returned Godot %s to a JS value",
             property_info.getter_func->get_name(), Variant::get_type_name(crval.get_type()));
-        impl::Helper::throw_error(isolate, error_message);
+        jsb_throw(isolate, error_message);
     }
 
     void ObjectReflectBindingUtil::_godot_object_set2(const v8::FunctionCallbackInfo<v8::Value>& info)
@@ -492,7 +508,7 @@ namespace jsb
         if (info.Length() != 1)
         {
             const String error_message = jsb_errorf("Failed to set property: %s. 1 argument is required", property_info.setter_func->get_name());
-            impl::Helper::throw_error(isolate, error_message);
+            jsb_throw(isolate, error_message);
             return;
         }
 
@@ -500,31 +516,31 @@ namespace jsb
         if (!property_info.setter_func->is_static() && (!TypeConvert::js_to_gd_obj(isolate, context, info.This(), gd_object) || !gd_object))
         {
             const String error_message = jsb_errorf("Failed to set property: %s. Bad this", property_info.setter_func->get_name());
-            impl::Helper::throw_error(isolate, error_message);
+            jsb_throw(isolate, error_message);
             return;
         }
 
         Variant cvar;
-        if (!TypeConvert::js_to_gd_var(isolate, context, info[0], property_info.setter_func->get_argument_type(1), cvar))
+        if (!TypeConvert::js_to_gd_var(isolate, context, info[0], (Variant::Type) property_info.setter_func->get_argument_type(1), cvar))
         {
             const String error_message = jsb_errorf("Failed to set property: %s. Unable to convert provided JS %s to Godot %s",
                 property_info.setter_func->get_name(), TypeConvert::js_debug_typeof(isolate, info[0]),
-                Variant::get_type_name(property_info.setter_func->get_argument_type(1)));
-            impl::Helper::throw_error(isolate, error_message);
+                Variant::get_type_name((Variant::Type) property_info.setter_func->get_argument_type(1)));
+            jsb_throw(isolate, error_message);
             return;
         }
 
         Variant args[] = { property_info.index, cvar };
-        const Variant* argv[] = { &args[0], &args[1] };
+        const GDExtensionConstVariantPtr argv[] = { (const GDExtensionConstVariantPtr) &args[0], (const GDExtensionConstVariantPtr) &args[1] };
 
         // call godot method
-        Callable::CallError error;
+        GDExtensionCallError error;
         property_info.setter_func->call(gd_object, argv, ::std::size(argv), error);
 
-        if (error.error != Callable::CallError::CALL_OK)
+        if (error.error != GDEXTENSION_CALL_OK)
         {
             const String error_message = jsb_errorf("Failed to set property: %s. Execution failed", property_info.setter_func->get_name());
-            impl::Helper::throw_error(isolate, error_message);
+            jsb_throw(isolate, error_message);
             return;
         }
     }

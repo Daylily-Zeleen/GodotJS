@@ -31,8 +31,6 @@
 #ifndef GODOTJS_RW_LOCK_H
 #define GODOTJS_RW_LOCK_H
 
-#if JSB_GDEXTENSION
-
 #ifdef MINGW_ENABLED
 #define MINGW_STDTHREAD_REDUNDANCY_WARNING
 #include "thirdparty/mingw-std-threads/mingw.shared_mutex.h"
@@ -105,10 +103,5 @@ public:
 	}
 };
 
-#else
-
-#include "core/os/rw_lock.h"
-
-#endif // JSB_GDEXTENSION
 
 #endif // RW_LOCK_H

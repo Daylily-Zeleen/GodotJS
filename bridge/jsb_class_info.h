@@ -142,7 +142,7 @@ namespace jsb
     {
     };
 
-    struct ScriptMethodInfo
+    struct ScriptMethodInfo // TODO: 为什么不复用 MethodInfo
     {
         // only valid with TOOLS_ENABLED
         ScriptMethodDoc doc;
@@ -155,30 +155,14 @@ namespace jsb
 
     };
 
-    struct ScriptPropertyInfo
+    struct ScriptPropertyInfo : public PropertyInfo
     {
-        Variant::Type type = Variant::NIL;
-        PropertyHint hint = PROPERTY_HINT_NONE;
-        uint32_t usage = PROPERTY_USAGE_DEFAULT;
-
-        StringName name;
-
-        //TODO class_name is needed if type is OBJECT
-        StringName class_name;
-
-        String hint_string;
-
         ScriptPropertyDoc doc;
 
         // valid only if _Evaluated flag is set in ScriptClassInfo.flags
         Variant default_value;
 
         bool cache;
-
-        explicit operator PropertyInfo() const
-        {
-            return { type, name, hint, hint_string, usage, class_name };
-        }
     };
 
     namespace ScriptClassFlags

@@ -1,6 +1,7 @@
 #include "jsb_class_info.h"
 #include "jsb_object_bindings.h"
 #include "jsb_type_convert.h"
+#include <godot_cpp/classes/resource_loader.hpp>
 
 //TODO it breaks the isolation of 'bridge'
 #include "../weaver/jsb_script.h"
@@ -47,7 +48,7 @@ namespace jsb
             }
             else
             {
-                r_doc.brief_description.clear();
+                r_doc.brief_description.resize(0);
             }
         }
     }
@@ -146,7 +147,7 @@ namespace jsb
                     if (prop_descriptor.As<v8::Object>()->Get(p_context, jsb_name(environment, value)).ToLocal(&prop_val) && prop_val->IsFunction())
                     {
                         //TODO property categories
-                        ScriptMethodInfo method_info = {};
+                        ScriptMethodInfo method_info {};
 #ifdef TOOLS_ENABLED
                         if (v8::Local<v8::Value> val; !doc_map.IsEmpty() && doc_map->Get(p_context, prop_name).ToLocal(&val) && val->IsObject())
                         {
@@ -306,7 +307,7 @@ namespace jsb
     void ScriptClassInfo::instantiate(Environment* p_env, const StringName& p_module_id, const v8::Local<v8::Object>& p_self)
     {
         const String source_path = internal::PathUtil::convert_javascript_path(p_module_id);
-        const Ref<GodotJSScript> script = ResourceLoader::load(source_path);
+        const Ref<GodotJSScript> script = ResourceLoader::get_singleton()->load(source_path, GodotJSScript::get_class_static());
         if (script.is_valid())
         {
             jsb_unused(script->can_instantiate()); // make it loaded immediately

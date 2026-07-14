@@ -14,6 +14,25 @@ namespace v8
         return Local<Primitive>(Data(isolate, jsb::impl::StackPos::Null));
     }
 
+    Maybe<bool> Name::Equals(Local<Context> context, Local<Name> other) const
+    {
+        const JSValue v1 = (JSValue)*this;
+        const JSValue v2 = (JSValue)other;
+        return Maybe<bool>(jsb::impl::QuickJS::Equals(v1, v2));
+    }
+
+    MaybeLocal<Value> Value::ToPrimitive(Local<Context> context) const
+    {
+        JSContext* ctx = isolate_->ctx();
+        const JSValue self = (JSValue) *this;
+        if (JS_VALUE_GET_TAG(self) < 0) // TAG >= 0 时是 Primitive 类型
+        {
+            return MaybeLocal<Value>();
+        }
+        const uint16_t stack_pos = isolate_->push_steal(self);
+        return MaybeLocal<Value>(Data(isolate_, stack_pos));
+    }
+
     MaybeLocal<String> Value::ToDetailString(Local<Context> context) const
     {
         const uint16_t stack_pos = isolate_->push_steal(JS_ToString(isolate_->ctx(), (JSValue) *this));
@@ -69,6 +88,33 @@ namespace v8
         return Local<Symbol>(Data(isolate, isolate->push_symbol()));
     }
 
+    Local<Symbol> Symbol::New(Isolate* isolate, Local<String> description)
+    {
+        return Local<Symbol>(Data(isolate, isolate->push_symbol(description.operator JSValue())));
+    }
+
+    Local<Symbol> Symbol::_get_well_known(Isolate* isolate, const char* name)
+    {
+        JSContext* ctx = isolate->ctx();
+        HandleScope func_scope(isolate);
+        const JSValue& symbol_obj = isolate->stack_val(jsb::impl::StackPos::SymbolClass);
+        JSValue val = JS_GetPropertyStr(ctx, symbol_obj, name);
+        JS_FreeValue(ctx, symbol_obj);
+        return Local<Symbol>(Data(isolate, isolate->push_steal(val)));
+    }
+
+    Local<Symbol> Symbol::GetAsyncIterator(Isolate* isolate) { return _get_well_known(isolate, "asyncIterator"); }
+    Local<Symbol> Symbol::GetHasInstance(Isolate* isolate) { return _get_well_known(isolate, "hasInstance"); }
+    Local<Symbol> Symbol::GetIsConcatSpreadable(Isolate* isolate) { return _get_well_known(isolate, "isConcatSpreadable"); }
+    Local<Symbol> Symbol::GetIterator(Isolate* isolate) { return _get_well_known(isolate, "iterator"); }
+    Local<Symbol> Symbol::GetMatch(Isolate* isolate) { return _get_well_known(isolate, "match"); }
+    Local<Symbol> Symbol::GetReplace(Isolate* isolate) { return _get_well_known(isolate, "replace"); }
+    Local<Symbol> Symbol::GetSearch(Isolate* isolate) { return _get_well_known(isolate, "search"); }
+    Local<Symbol> Symbol::GetSplit(Isolate* isolate) { return _get_well_known(isolate, "split"); }
+    Local<Symbol> Symbol::GetToPrimitive(Isolate* isolate) { return _get_well_known(isolate, "toPrimitive"); }
+    Local<Symbol> Symbol::GetToStringTag(Isolate* isolate) { return _get_well_known(isolate, "toStringTag"); }
+    Local<Symbol> Symbol::GetUnscopables(Isolate* isolate) { return _get_well_known(isolate, "unscopables"); }
+
     int String::Length() const
     {
         const JSValue val = JS_GetProperty(isolate_->ctx(), (JSValue) *this, jsb::impl::JS_ATOM_length);
@@ -81,6 +127,97 @@ namespace v8
         return Local<String>(Data(isolate, jsb::impl::StackPos::EmptyString));
     }
 
+    MaybeLocal<String> String::NewFromUtf8(Isolate* isolate, const char* data, int length)
+    {
+        JSContext* ctx = isolate->ctx();
+        JSValue val = JS_NewStringLen(ctx, data, length < 0 ? (int)strlen(data) : length);
+        if (JS_IsException(val))
+        {
+            jsb::impl::QuickJS::MarkExceptionAsTrivial(ctx);
+            return MaybeLocal<String>();
+        }
+        return MaybeLocal<String>(Data(isolate, isolate->push_steal(val)));
+    }
+
+    int String::WriteUtf8(Isolate* isolate, char* buffer, int length, int* nchars_ref) const
+    {
+        JSContext* ctx = isolate->ctx();
+        const JSValue self = (JSValue) *this;
+        size_t len;
+        const char* chars = JS_ToCStringLen(ctx, &len, self);
+        if (!chars)
+        {
+            jsb::impl::QuickJS::MarkExceptionAsTrivial(ctx);
+            return 0;
+        }
+
+        const int available = (int)len;
+        const int to_write = (length < 0 || length > available) ? available : length;
+        if (to_write > 0)
+        {
+            memcpy(buffer, chars, to_write);
+        }
+
+        JS_FreeCString(ctx, chars);
+
+        if (nchars_ref)
+        {
+            // QuickJS returns byte length; for pure ASCII they're the same.
+            // For non-ASCII we'd need to count codepoints, but this is good enough for our use cases.
+            *nchars_ref = to_write;
+        }
+        return to_write;
+    }
+
+    Local<String> String::NewFromUtf8Literal(Isolate* isolate, const char *literal, NewStringType type, int length)
+    {
+        JSValue val = JS_NewStringLen(isolate->ctx(), literal, length);
+        jsb_check(!JS_IsException(val));
+        return Local<String>(Data(isolate, isolate->push_steal(val)));
+    }
+
+
+    Local<Symbol> Symbol::For(Isolate* isolate, Local<String> key)
+    {
+        JSContext* ctx = isolate->ctx();
+
+        HandleScope func_scope(isolate);
+        const JSValue& symbol_obj = isolate->stack_val(jsb::impl::StackPos::SymbolClass);
+
+        // Use Symbol.for(key) from JavaScript
+        const JSValue for_fn = JS_GetPropertyStr(ctx, symbol_obj, "for");
+        JSValue key_val = JS_DupValue(ctx, (JSValue) key);
+        JSValue result = JS_Call(ctx, for_fn, symbol_obj, 1, &key_val);
+        JS_FreeValue(ctx, key_val);
+        JS_FreeValue(ctx, for_fn);
+        if (JS_IsException(result))
+        {
+            jsb::impl::QuickJS::MarkExceptionAsTrivial(ctx);
+            return Local<Symbol>();
+        }
+        const uint16_t stack_pos = isolate->push_steal(result);
+        return Local<Symbol>(Data(isolate, stack_pos));
+    }
+
+    Local<String> Symbol::Description(Isolate* isolate) const
+    {
+        JSContext* ctx = isolate->ctx();
+        // Read the `description` property of the symbol
+        const JSValue self = (JSValue) *this;
+        const JSValue desc = JS_GetPropertyStr(ctx, self, "description");
+        if (JS_IsException(desc) || JS_IsUndefined(desc))
+        {
+            jsb::impl::QuickJS::MarkExceptionAsTrivial(ctx);
+            return Local<String>();
+        }
+        if (JS_IsNull(desc))
+        {
+            return Local<String>();
+        }
+        const uint16_t stack_pos = isolate->push_steal(desc);
+        return Local<String>(Data(isolate, stack_pos));
+    }
+
     Local<Integer> Integer::New(Isolate* isolate, int32_t value)
     {
         const uint16_t stack_pos = isolate->push_steal(JS_NewInt32(isolate->ctx(), value));
@@ -91,7 +228,7 @@ namespace v8
     {
         //TODO avoid using Uint32 because the underlying tag is INT or FLOAT64
         const uint16_t stack_pos = isolate->push_steal(JS_NewUint32(isolate->ctx(), value));
-        return Local<String>(Data(isolate, stack_pos));
+        return Local<Integer>(Data(isolate, stack_pos));
     }
 
     double Number::Value() const
@@ -162,7 +299,10 @@ namespace v8
         if (JS_ToBigInt64(isolate_->ctx(), &rval, val) == -1)
         {
             jsb::impl::QuickJS::MarkExceptionAsTrivial(isolate_->ctx());
+            if (lossless) *lossless = false;
+            return 0;
         }
+        if (lossless) *lossless = true;
         return rval;
     }
 

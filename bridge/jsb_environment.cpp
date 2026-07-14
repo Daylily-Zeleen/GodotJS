@@ -1,6 +1,8 @@
 #include "jsb_environment.h"
 
 #include "jsb_bridge_module_loader.h"
+#include "jsb_compat.h"
+#include "jsb_engine_compat.h"
 #include "jsb_godot_module_loader.h"
 #include "jsb_transpiler.h"
 #include "jsb_ref.h"
@@ -20,24 +22,15 @@
 #include "../internal/jsb_variant_util.h"
 #include "../internal/jsb_settings.h"
 #include "../jsb_project_preset.h"
-#include "core/variant/variant_utility.h"
-
-#ifdef TOOLS_ENABLED
-#if GODOT_4_5_OR_NEWER
-#include "editor/settings/editor_settings.h"
-#else
-#include "editor/editor_settings.h"
-#endif
-#endif
-#include "main/performance.h"
-#include "core/io/resource_loader.h"
-#include "core/os/thread_safe.h"
-#include "scene/main/node.h"
+#include "../weaver/jsb_script_language.h"
+#include "../weaver/jsb_script_instance.h"
+#include "../gen/core_constants.gen.h"
+#include "../gen/utility_functions_ext.gen.h"
 
 //TODO remove this
 #include "../weaver/jsb_script.h"
-#include "modules/GodotJS/weaver/jsb_script_instance.h"
-#include "modules/GodotJS/weaver/jsb_script_language.h"
+
+#include <godot_cpp/classes/resource_loader.hpp>
 
 #if JSB_WITH_WEB
 #include "../impl/web/jsb_web_interop.h"
@@ -69,14 +62,13 @@ namespace jsb
         std::vector<std::shared_ptr<Environment>> get_list()
         {
             std::vector<std::shared_ptr<Environment>> rval;
-            lock_.lock();
+            std::lock_guard<std::mutex> lock(mutex_);
             for (void* ptr : all_runtimes_)
             {
                 //TODO check if it's not removed from `all_runtimes_` but being destructed already (consider remove it from the list immediately on destructor called)
                 Environment* env = (Environment*) ptr;
                 rval.push_back(env->shared_from_this());
             }
-            lock_.unlock();
             return rval;
         }
 
@@ -84,14 +76,13 @@ namespace jsb
         std::shared_ptr<Environment> access(void* p_runtime)
         {
             std::shared_ptr<Environment> rval;
-            lock_.lock();
+            std::lock_guard<std::mutex> lock(mutex_);
             if (all_runtimes_.has(p_runtime))
             {
                 //TODO check if it's not removed from `all_runtimes_` but being destructed already (consider remove it from the list immediately on destructor called)
                 Environment* env = (Environment*) p_runtime;
                 rval = env->shared_from_this();
             }
-            lock_.unlock();
             return rval;
         }
 
@@ -99,18 +90,17 @@ namespace jsb
         std::shared_ptr<Environment> access()
         {
             std::shared_ptr<Environment> rval;
-            lock_.lock();
+            std::lock_guard<std::mutex> lock(mutex_);
             for (void* ptr : all_runtimes_)
             {
                 //TODO check if it's not removed from `all_runtimes_` but being destructed already (consider remove it from the list immediately on destructor called)
                 Environment* env = (Environment*) ptr;
-                if (env->thread_id_ != Thread::UNASSIGNED_ID && env->is_caller_thread())
+                if (env->thread_id_ != compat::UNASSIGNED_THREAD_ID && env->is_caller_thread())
                 {
                     rval = env->shared_from_this();
                     break;
                 }
             }
-            lock_.unlock();
             return rval;
         }
 
@@ -118,37 +108,33 @@ namespace jsb
         Environment* internal_access(void* p_runtime)
         {
             Environment* rval = nullptr;
-            lock_.lock();
+            std::lock_guard<std::mutex> lock(mutex_);
             if (all_runtimes_.has(p_runtime))
             {
                 rval = (Environment*) p_runtime;
             }
-            lock_.unlock();
             return rval;
         }
 
         bool exists(void* p_runtime) const
         {
-            lock_.lock();
+            std::lock_guard<std::mutex> lock(mutex_);
             const bool rval = all_runtimes_.has(p_runtime);
-            lock_.unlock();
             return rval;
         }
 
         void add(void* p_runtime)
         {
-            lock_.lock();
+            std::lock_guard<std::mutex> lock(mutex_);
             jsb_check(!all_runtimes_.has(p_runtime));
             all_runtimes_.insert(p_runtime);
-            lock_.unlock();
         }
 
         void remove(void* p_runtime)
         {
-            lock_.lock();
+            std::lock_guard<std::mutex> lock(mutex_);
             jsb_check(all_runtimes_.has(p_runtime));
             all_runtimes_.erase(p_runtime);
-            lock_.unlock();
         }
 
         jsb_force_inline static EnvironmentStore& get_shared()
@@ -158,7 +144,7 @@ namespace jsb
         }
 
     private:
-        BinaryMutex lock_;
+        mutable std::mutex mutex_;
         HashSet<void*> all_runtimes_;
     };
 
@@ -226,14 +212,14 @@ namespace jsb
         {
             if (const OS* os = OS::get_singleton())
             {
-                gc_ticks = os->get_ticks_msec();
+                gc_ticks = Time::get_singleton()->get_ticks_msec();
             }
         }
 
         void OnPostGCCallback(v8::Isolate* isolate, v8::GCType type, v8::GCCallbackFlags flags)
         {
             JSB_LOG(VeryVerbose, "v8 gc time %dms type:%d flags:%d",
-                OS::get_singleton() ? OS::get_singleton()->get_ticks_msec() - gc_ticks : -1, type, flags);
+                OS::get_singleton() ? Time::get_singleton()->get_ticks_msec() - gc_ticks : -1, type, flags);
         }
 #endif
 
@@ -336,36 +322,31 @@ namespace jsb
                         }
                     }
 
-                    List<Engine::Singleton> singleton_list;
-                    Engine::get_singleton()->get_singletons(&singleton_list);
-
-                    for (auto it = singleton_list.begin(); it != singleton_list.end(); ++it)
+                    PackedStringArray singleton_list = Engine::get_singleton()->get_singleton_list();
+                    for (const StringName& singleton_name : singleton_list)
                     {
-                        String exposed_name = internal::NamingUtil::get_class_name(it->name);
-
-                        if (exposed_name != it->name)
+                        String exposed_name = internal::NamingUtil::get_class_name(singleton_name);
+                        if (exposed_name != singleton_name)
                         {
-                            names.add_replacement(it->name, exposed_name);
+                            names.add_replacement(singleton_name, exposed_name);
                         }
                     }
 
-                    Vector<String> reserved_words = GodotJSScriptLanguage::get_singleton()->get_reserved_words();
+                    PackedStringArray reserved_words = GodotJSScriptLanguage::get_singleton()->_get_reserved_words();
 
-                    List<StringName> utility_function_list;
-                    Variant::get_utility_function_list(&utility_function_list);
-
-                    for (auto it = utility_function_list.begin(); it != utility_function_list.end(); ++it)
-                    {
-                        String exposed_name = internal::NamingUtil::get_member_name(*it);
+                    List<StringName> utility_func_list;
+                    VariantExt::get_utility_function_list(&utility_func_list);
+                    for (const StringName& func_name : utility_func_list) {
+                        StringName exposed_name = func_name;
 
                         if (reserved_words.find(exposed_name) >= 0)
                         {
                             exposed_name = internal::NamingUtil::get_member_name("godot_" + exposed_name);
                         }
 
-                        if (exposed_name != *it)
+                        if (exposed_name != func_name)
                         {
-                            names.add_replacement(*it, exposed_name);
+                            names.add_replacement(func_name, exposed_name);
                         }
                     }
 
@@ -443,10 +424,11 @@ namespace jsb
         native_classes_.clear();
 
 
-        while (v8::Isolate::GetCurrent() == isolate_)
-        {
-            isolate_->Exit();
-        }
+        // while (v8::Isolate::GetCurrent() == isolate_)
+        // {
+        //     isolate_->Exit();
+        // }
+
         isolate_->Dispose();
         isolate_ = nullptr;
 
@@ -672,7 +654,7 @@ namespace jsb
     bool Environment::add_async_call(AsyncCall::Type p_type, void* p_binding)
     {
 #if JSB_THREADING
-        if (Thread::get_caller_id() != thread_id_)
+        if (OS::get_singleton()->get_thread_caller_id() != thread_id_)
         {
             async_calls_.add(AsyncCall(p_type, p_binding));
             return true;
@@ -855,42 +837,33 @@ namespace jsb
     NativeObjectID Environment::bind_godot_object(NativeClassID p_class_id, Object* p_pointer, const v8::Local<v8::Object>& p_object, bool p_js_owned_non_ref)
     {
         // handle the shadow instance created by asynchronous ResourceLoader
-        if (ScriptInstance* si = p_pointer->get_script_instance(); si && !si->is_placeholder())
+        if (GodotJSShadowScriptInstance* script_instance = ScriptInstance::get_script_instance<GodotJSShadowScriptInstance>(p_pointer))
         {
-            // to ensure the type of the script instance is GodotJSScriptInstanceBase
-            if (si->get_language() == GodotJSScriptLanguage::get_singleton())
+            // need to strongly reference the owner object if it's RefCounted. we use Variant for simplicity
+            const Variant holder = p_pointer;
+            const Ref<GodotJSScript> script = script_instance->get_script();
+            jsb_check(script.is_valid());
+            JSB_LOG(Verbose, "displace a shadow script instance %s (%s)", (uintptr_t) p_pointer, script->get_path());
+            ScriptInstancePropertyState state;
+            script_instance->get_property_state(state);
+            ScriptInstance::set_script_instance(p_pointer, nullptr);
+            GodotJSScriptInstanceBase* new_script_instance = static_cast<GodotJSScriptInstanceBase*>(script->instance_create(p_object, p_pointer, false));
+            jsb_check(new_script_instance);
+            jsb_unused(new_script_instance);
+            for (const Pair<StringName, Variant>& pair : state)
             {
-                GodotJSScriptInstanceBase* script_instance = (GodotJSScriptInstanceBase*) si;
-                if (script_instance->is_shadow())
-                {
-                    // need to strongly reference the owner object if it's RefCounted. we use Variant for simplicity
-                    const Variant holder = p_pointer;
-                    const Ref<GodotJSScript> script = script_instance->get_script();
-                    jsb_check(script.is_valid());
-                    JSB_LOG(Verbose, "displace a shadow script instance %s (%s)", (uintptr_t) p_pointer, script->get_path());
-                    List<Pair<StringName, Variant>> state;
-                    script_instance->get_property_state(state);
-                    p_pointer->set_script_instance(nullptr);
-                    ScriptInstance* new_script_instance = script->instance_create(p_object, p_pointer, false);
-                    jsb_check(new_script_instance);
-                    jsb_unused(new_script_instance);
-                    for (const Pair<StringName, Variant>& pair : state)
-                    {
-                        new_script_instance->set(pair.first, pair.second);
-                    }
-                    const NativeObjectID new_id = try_get_object_id(p_pointer);
-                    jsb_check(new_id);
-                    return new_id;
-                }
+                new_script_instance->set(pair.first, pair.second);
             }
+            const NativeObjectID new_id = try_get_object_id(p_pointer);
+            jsb_check(new_id);
+            return new_id;
         }
 
         // We need to increase the refcount because Godot Objects are bound as external pointer with a strong JS reference,
         // and unreference() will always be called on gc callbacks.
         int external_rc = 1;
-        if (p_pointer->is_ref_counted())
+        if (RefCounted* ref_counted = Object::cast_to<RefCounted>(p_pointer))
         {
-            RefCounted* ref_counted = (RefCounted*) p_pointer;
             if (!ref_counted->init_ref())
             {
                 JSB_LOG(Error, "can not bind a dead object %d", (uintptr_t) p_pointer);
@@ -903,7 +876,7 @@ namespace jsb
         }
         const NativeObjectID object_id = bind_pointer(p_class_id, NativeClassType::GodotObject, (void*) p_pointer, p_object, external_rc, p_js_owned_non_ref);
 
-        p_pointer->get_instance_binding(this, gd_instance_binding_callbacks);
+        ::object_get_instance_binding(p_pointer, this, gd_instance_binding_callbacks);
         return object_id;
     }
 
@@ -1077,7 +1050,7 @@ namespace jsb
             if (finalize_type != FinalizationType::None && class_info.type == NativeClassType::GodotObject)
             {
                 const Object* godot_object = static_cast<const Object*>(p_pointer);
-                if (!godot_object->is_ref_counted() && !js_owned_non_ref)
+                if (!godot_object->is_class(RefCounted::get_class_static()) && !js_owned_non_ref)
                 {
                     finalize_type = FinalizationType::None;
                 }
@@ -1363,7 +1336,7 @@ namespace jsb
             return resolved_module;
         }
 
-        impl::Helper::throw_error(isolate, jsb_format("unknown module: %s", normalized_id));
+        jsb_throw(isolate, jsb_format("unknown module: %s", normalized_id));
         return nullptr;
     }
 
@@ -1649,7 +1622,7 @@ namespace jsb
             return nullptr;
         }
 
-        String class_name = internal::NamingUtil::get_class_name(p_class_info->gdtype->get_name());
+        String class_name = internal::NamingUtil::get_class_name(p_class_info->name);
 
         if (const NativeClassID* it = godot_classes_index_.getptr(class_name))
         {
@@ -1754,7 +1727,7 @@ namespace jsb
         return false;
     }
 
-    Variant Environment::_call(v8::Isolate* isolate, const v8::Local<v8::Context>& context, const v8::Local<v8::Function>& p_func, const v8::Local<v8::Value>& p_self, const Variant** p_args, int p_argcount, Callable::CallError& r_error)
+    Variant Environment::_call(v8::Isolate* isolate, const v8::Local<v8::Context>& context, const v8::Local<v8::Function>& p_func, const v8::Local<v8::Value>& p_self, const Variant** p_args, int p_argcount, GDExtensionCallError& r_error)
     {
         using LocalValue = v8::Local<v8::Value>;
         LocalValue* argv = jsb_stackalloc(LocalValue, p_argcount);
@@ -1765,7 +1738,7 @@ namespace jsb
             {
                 // revert constructed values if error occurred
                 while (index >= 0) argv[index--].~LocalValue();
-                r_error.error = Callable::CallError::CALL_ERROR_INVALID_METHOD;
+                r_error.error = GDEXTENSION_CALL_ERROR_INVALID_METHOD;
                 return {};
             }
         }
@@ -1780,7 +1753,7 @@ namespace jsb
         if (try_catch_run.has_caught())
         {
             JSB_LOG(Error, "exception thrown in function:\n%s", BridgeHelper::get_exception(try_catch_run));
-            r_error.error = Callable::CallError::CALL_ERROR_INVALID_METHOD;
+            r_error.error = GDEXTENSION_CALL_ERROR_INVALID_METHOD;
             return {};
         }
 
@@ -1797,7 +1770,7 @@ namespace jsb
             if (!rval_checked->IsPromise())
             {
                 JSB_LOG(Error, "failed to translate returned value");
-                r_error.error = Callable::CallError::CALL_ERROR_INVALID_METHOD;
+                r_error.error = GDEXTENSION_CALL_ERROR_INVALID_METHOD;
             }
             return {};
         }
@@ -1839,13 +1812,13 @@ namespace jsb
 
             if (!TypeConvert::js_to_gd_var(isolate, context, value, p_info.type, r_val))
             {
-                JSB_LOG(Error, "Failed to get property '%s' on a %s: Failed to convert result to a Godot type (%s)", p_info.name, p_info.class_name, VariantUtilityFunctions::type_string(p_info.type));
+                JSB_LOG(Error, "Failed to get property '%s' on a %s: Failed to convert result to a Godot type (%s)", p_info.name, p_info.class_name, UtilityFunctions::type_string(p_info.type));
                 return false;
             }
         }
         else
         {
-            r_val = VariantUtilityFunctions::type_convert( p_info.default_value, p_info.type);
+            r_val = UtilityFunctions::type_convert(p_info.default_value, p_info.type);
         }
 
         return true;
@@ -1976,7 +1949,7 @@ namespace jsb
         const v8::Local<v8::Object> self = this->get_object(p_object_id);
 
         Variant unpacked;
-        if (!TypeConvert::js_to_gd_var(isolate, context, self, Variant::OBJECT, unpacked) || unpacked.is_null())
+        if (!TypeConvert::js_to_gd_var(isolate, context, self, Variant::OBJECT, unpacked) || Object::cast_to<Object>(unpacked) == nullptr)
         {
             JSB_LOG(Error, "failed to access 'this'");
             return;
@@ -1999,7 +1972,7 @@ namespace jsb
                 if (element_value->IsString())
                 {
                     const String node_path_str = impl::Helper::to_string(isolate, element_value);
-                    Node* child_node = node->get_node(node_path_str);
+                    Node* child_node = node->get_node_or_null(NodePath(node_path_str));
                     if (!child_node)
                     {
                         self->Set(context, element_name, v8::Null(isolate)).Check();
@@ -2047,7 +2020,7 @@ namespace jsb
         }
     }
 
-    Variant Environment::call_script_method(ScriptClassID p_script_class_id, NativeObjectID p_object_id, const StringName& p_method, const Variant** p_argv, int p_argc, Callable::CallError& r_error)
+    Variant Environment::call_script_method(ScriptClassID p_script_class_id, NativeObjectID p_object_id, const StringName& p_method, const Variant** p_argv, int p_argc, GDExtensionCallError& r_error)
     {
         // static calls are not supported
         if (!p_object_id)
@@ -2057,7 +2030,7 @@ namespace jsb
 
         if (!is_caller_thread())
         {
-            const uint64_t caller_thread_id = Thread::get_caller_id();
+            const uint64_t caller_thread_id = OS::get_singleton()->get_thread_caller_id();
             String object_type = "<unresolved>";
             String node_path = "<not-node-or-not-in-tree>";
             String owner_instance_id = "0";
@@ -2073,7 +2046,7 @@ namespace jsb
                     owner_instance_id = String::num_uint64(object->get_instance_id());
                     object_type = object->get_class();
 
-                    if (ScriptInstance* script_instance = object->get_script_instance())
+                    if (ScriptInstance* script_instance = ScriptInstance::get_script_instance(object))
                     {
                         script_instance_ptr = String::num_uint64((uintptr_t) script_instance);
 
@@ -2093,11 +2066,9 @@ namespace jsb
                 }
             }
 
-            JSB_LOG(Error, "can not call script method from a different thread (env_thread=%s caller_thread=%s node_safe=%d group_processing=%d object_id=%s object_instance_id=%s script_instance_ptr=%s script_env_thread=%s method=%s object_type=%s node_path=%s)",
+            JSB_LOG(Error, "can not call script method from a different thread (env_thread=%s caller_thread=%s object_id=%s object_instance_id=%s script_instance_ptr=%s script_env_thread=%s method=%s object_type=%s node_path=%s)",
                 String::num_uint64((uint64_t) thread_id_),
                 String::num_uint64((uint64_t) caller_thread_id),
-                (int) is_current_thread_safe_for_nodes(),
-                (int) Node::is_group_processing(),
                 String::num_uint64(*p_object_id),
                 owner_instance_id,
                 script_instance_ptr,
@@ -2106,7 +2077,7 @@ namespace jsb
                 object_type,
                 node_path);
 
-            r_error.error = Callable::CallError::CALL_ERROR_INVALID_METHOD;
+            r_error.error = GDEXTENSION_CALL_ERROR_INVALID_METHOD;
             return {};
         }
 
@@ -2153,29 +2124,29 @@ namespace jsb
         if (!this->try_get_object(p_object_id, self))
         {
             JSB_LOG(Error, "invalid `this` for calling function");
-            r_error.error = Callable::CallError::CALL_ERROR_INVALID_METHOD;
+            r_error.error = GDEXTENSION_CALL_ERROR_INVALID_METHOD;
             return {};
         }
 
-        if (p_method == SceneStringNames::get_singleton()->_ready)
+        if (p_method == jsb_string_name(_ready))
         {
             call_script_prelude(p_script_class_id, p_object_id);
         }
 
         if (method_func.IsEmpty())
         {
-            r_error.error = Callable::CallError::CALL_ERROR_INVALID_METHOD;
+            r_error.error = GDEXTENSION_CALL_ERROR_INVALID_METHOD;
             return {};
         }
         return _call(isolate, context, method_func, self, p_argv, p_argc, r_error);
     }
 
-    Variant Environment::call_function(void* p_pointer, ObjectCacheID p_func_id, const Variant** p_args, int p_argcount, Callable::CallError& r_error)
+    Variant Environment::call_function(void* p_pointer, ObjectCacheID p_func_id, const Variant** p_args, int p_argcount, GDExtensionCallError& r_error)
     {
         this->check_internal_state();
         if (!function_bank_.is_valid_index(p_func_id))
         {
-            r_error.error = Callable::CallError::CALL_ERROR_INVALID_METHOD;
+            r_error.error = GDEXTENSION_CALL_ERROR_INVALID_METHOD;
             return {};
         }
 
@@ -2194,7 +2165,7 @@ namespace jsb
             if (!this->try_get_object(p_pointer, self))
             {
                 JSB_LOG(Error, "invalid `this` for calling function");
-                r_error.error = Callable::CallError::CALL_ERROR_INVALID_METHOD;
+                r_error.error = GDEXTENSION_CALL_ERROR_INVALID_METHOD;
                 return {};
             }
             const TStrongRef<v8::Function>& js_func = function_bank_.get_value(p_func_id);
@@ -2220,7 +2191,7 @@ namespace jsb
             Object* obj = p_variant;
             jsb_check(obj && object_db_.has_object(obj) && jsb::compat::ObjectDB::get_instance(p_variant));
 
-            if (ScriptInstance* script_instance = obj->get_script_instance())
+            if (ScriptInstance* script_instance = ScriptInstance::get_script_instance(obj))
             {
                 jsb_check(script_instance);
                 const Ref script = script_instance->get_script();
@@ -2239,7 +2210,7 @@ namespace jsb
         if (variant.get_type() == Variant::OBJECT)
         {
             Object* obj = variant;
-            obj->set_script_instance(nullptr);
+            ScriptInstance::set_script_instance(obj, nullptr);
             free_object(obj, FinalizationType::None);
         }
 
@@ -2269,15 +2240,15 @@ namespace jsb
 
         if (has_script_path)
         {
-            const Ref<GodotJSScript> script = ResourceLoader::load(p_data.script_path);
+            const Ref<GodotJSScript> script = ResourceLoader::get_singleton()->load(p_data.script_path);
 
             if (script.is_valid())
             {
                 // Always rebind transferred scripts onto the receiver environment.
                 // Existing instances can be stale and still reference a source worker env.
-                if (instance->get_script_instance())
+                if (ScriptInstance *existing_script_instance = ScriptInstance::get_script_instance(instance))
                 {
-                    instance->set_script_instance(nullptr);
+                    ScriptInstance::set_script_instance(instance, nullptr);
                 }
 
                 ScriptInstance* script_instance = script->instance_create(instance);
@@ -2298,10 +2269,8 @@ namespace jsb
             v8::Local<v8::Object> obj;
             jsb_check(TypeConvert::gd_obj_to_js(isolate_, p_context, instance, obj));
 
-            if (instance->is_ref_counted())
+            if (RefCounted* reference = Object::cast_to<RefCounted>(instance))
             {
-                RefCounted* reference = static_cast<RefCounted*>(instance);
-
                 if (reference->unreference())
                 {
                     // Uh, we really shouldn't end up here. This can only occur if another thread is doing something it
@@ -2335,11 +2304,14 @@ namespace jsb
             return;
         }
 
-        ScriptInstance* script_instance = instance->get_script_instance();
+        ScriptInstance* script_instance = ScriptInstance::get_script_instance(instance);
+#ifdef TOOLS_ENABLED
+        ERR_FAIL_COND_MSG(script_instance->is_placeholder(), "Environment::transfer_in_apply_state(): Unexpected case: try to transfer to an placeholder script instance.");
+#endif // TOOLS_ENABLED
 
         if (!script_instance)
         {
-            const Ref<GodotJSScript> script = ResourceLoader::load(p_data.script_path);
+            const Ref<GodotJSScript> script = ResourceLoader::get_singleton()->load(p_data.script_path);
 
             if (!script.is_valid())
             {
@@ -2352,7 +2324,7 @@ namespace jsb
 
         for (const Pair<StringName, Variant>& pair : p_data.state)
         {
-            script_instance->set(pair.first, pair.second);
+            static_cast<GodotJSScriptInstanceBase*>(script_instance)->set(pair.first, pair.second);
         }
     }
 

@@ -125,6 +125,7 @@ namespace v8
         jsb_ensure(emplace_(details::verified(JS_GetProperty(ctx_, global, jsb::impl::JS_ATOM_Symbol))) == jsb::impl::StackPos::SymbolClass);
         jsb_ensure(emplace_(details::verified(JS_GetProperty(ctx_, global, jsb::impl::JS_ATOM_Map))) == jsb::impl::StackPos::MapClass);
         jsb_ensure(emplace_(details::verified(JS_GetProperty(ctx_, global, jsb::impl::JS_ATOM_Set))) == jsb::impl::StackPos::SetClass);
+        jsb_ensure(emplace_(details::verified(JS_GetProperty(ctx_, global, jsb::impl::JS_ATOM_Proxy))) == jsb::impl::StackPos::ProxyClass);
         jsb_ensure(emplace_(JS_NULL) == jsb::impl::StackPos::Exception);
         jsb_check(stack_pos_ == jsb::impl::StackPos::Num);
 
@@ -207,6 +208,25 @@ namespace v8
     {
         const JSValue val = JS_CallConstructor2(ctx_, details::verified(stack_[jsb::impl::StackPos::SetClass]), JS_UNDEFINED, 0, nullptr);
         jsb_check(JS_IsSet(val));
+        return push_steal(details::verified(val));
+    }
+
+    uint16_t Isolate::push_proxy(JSValue target_obj, JSValue handler_obj)
+    {
+        JSValue argv[2] = {target_obj, handler_obj};
+        const JSValue val = JS_CallConstructor2(ctx_, details::verified(stack_[jsb::impl::StackPos::ProxyClass]), JS_UNDEFINED, 2, argv);
+    #if JSB_PREFER_QUICKJS_NG
+        jsb_check(!JS_IsProxy(val));
+    #else // !JSB_PREFER_QUICKJS_NG
+        jsb_check(!JS_IsUndefined(val)); // QuickJS 没有 JS_IsProxy
+    #endif
+        return push_steal(details::verified(val));
+    }
+
+    uint16_t Isolate::push_symbol(JSValue description_str)
+    {
+        const JSValue val = JS_CallConstructor2(ctx_, details::verified(stack_[jsb::impl::StackPos::SymbolClass]), JS_UNDEFINED, 1, &description_str);
+        jsb_check(JS_VALUE_GET_TAG(val) == JS_TAG_SYMBOL);
         return push_steal(details::verified(val));
     }
 

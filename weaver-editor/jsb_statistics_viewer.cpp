@@ -1,9 +1,6 @@
 #include "jsb_statistics_viewer.h"
 #include "jsb_editor_pch.h"
 
-#if GODOT_4_7_OR_NEWER
-#include "core/object/callable_mp.h"
-#endif
 
 GodotJSStatisticsViewer::GodotJSStatisticsViewer()
 {

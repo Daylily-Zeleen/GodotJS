@@ -11,12 +11,12 @@ namespace jsb
     class AMDModuleLoader : public IModuleLoader
     {
     private:
-        Vector<String> deps_;
+        PackedStringArray deps_;
         v8::Global<v8::Function> evaluator_;
         bool internal_;
 
     public:
-        AMDModuleLoader(const Vector<String>& p_deps, v8::Global<v8::Function>&& p_evaluator)
+        AMDModuleLoader(const PackedStringArray& p_deps, v8::Global<v8::Function>&& p_evaluator)
         : deps_(p_deps), evaluator_(std::move(p_evaluator))
         {}
 

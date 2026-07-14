@@ -36,6 +36,9 @@ namespace v8
 
         MaybeLocal<Value> GetOwnPropertyDescriptor(Local<Context> context, Local<Name> key) const;
         Maybe<bool> HasOwnProperty(Local<Context> context, Local<Name> key) const;
+        Maybe<bool> HasRealNamedProperty(Local<Context> context, Local<Name> key) const;
+
+        Maybe<bool> Has(Local<Context> context, Local<Value> key) const;
 
         MaybeLocal<Array> GetOwnPropertyNames(
             Local<Context> context, PropertyFilter filter,
@@ -72,6 +75,22 @@ namespace v8
 
             Maybe<bool> Reject(Local<Context> context, Local<Value> value);
         };
+    };
+
+    // Proxy - wraps quickjs-ng's JS_NewProxy or calls new Proxy() in quickjs
+    class Proxy : public Object
+    {
+    public:
+        static MaybeLocal<Proxy> New(Local<Context> context, Local<Object> target, Local<Object> handler);
+        Local<Object> GetTarget() const;
+    };
+
+    // Script - wraps JS_Eval with compile-then-run
+    class Script : public Object
+    {
+    public:
+        static MaybeLocal<Script> Compile(Local<Context> context, Local<String> source);
+        MaybeLocal<Value> Run(Local<Context> context);
     };
 
 }

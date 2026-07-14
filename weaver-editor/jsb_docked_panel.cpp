@@ -3,9 +3,8 @@
 #include "jsb_repl.h"
 #include "jsb_statistics_viewer.h"
 
-#if GODOT_4_7_OR_NEWER
-#include "core/object/callable_mp.h"
-#endif
+#include <godot_cpp/classes/margin_container.hpp>
+
 
 namespace
 {
@@ -15,8 +14,14 @@ namespace
 
 GodotJSDockedPanel::GodotJSDockedPanel()
 {
+    set_name(TTR("GodotJS"));
+    set_default_slot(EditorDock::DOCK_SLOT_BOTTOM);
+
+    MarginContainer *margin = memnew(MarginContainer);
+    add_child(margin);
+
     tabs = memnew(TabContainer);
-    add_child(tabs);
+    margin->add_child(tabs);
     tabs->connect("tab_changed", callable_mp(this, &GodotJSDockedPanel::on_tab_changed));
 
     {

@@ -31,17 +31,18 @@
         ┃    ┣━ docs
         ┃    ┣━ impl
         ┃    ┣━ internal
-        ┃    ┣━ lws
-        ┃    ┣━ quickjs
-        ┃    ┣━ quickjs-ng
         ┃    ┣━ scripts
         ┃    ┣━ tests
-        ┃    ┣━ v8
-        ┃    ┃   ┣━ include
-        ┃    ┃   ┣━ linux.x86_64.release
-        ┃    ┃   ┣━ macos.arm64.release
-        ┃    ┃   ┣━ windows_x86_64_release
-        ┃    ┃   ┗━ ...
+        ┃    ┣━ third
+        ┃    ┃   ┣━ lws
+        ┃    ┃   ┣━ quickjs
+        ┃    ┃   ┣━ quickjs-ng
+        ┃    ┃   ┗━ v8
+        ┃    ┃       ┣━ include
+        ┃    ┃       ┣━ linux.x86_64.release
+        ┃    ┃       ┣━ macos.arm64.release
+        ┃    ┃       ┣━ windows_x86_64_release
+        ┃    ┃       ┗━ ...
         ┃    ┣━ weaver
         ┃    ┗━ weaver-editor
         ┣━ gridmap
