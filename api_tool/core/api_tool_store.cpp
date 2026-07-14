@@ -191,6 +191,14 @@ static ApiConstantInfo deserialize_constant_info(PayloadReader &r) {
     return v;
 }
 
+static ApiBuiltInClassConstantInfo deserialize_builtin_class_constant_info(PayloadReader &r) {
+    ApiBuiltInClassConstantInfo v;
+    v.name = r.read_string_name();
+    v.type = static_cast<Variant::Type>(r.read_u32());
+    v.value = r.read_variant();
+    return v;
+}
+
 static ApiSignalInfo deserialize_signal_info(PayloadReader &r) {
     ApiSignalInfo v;
     v.name = r.read_string_name();
@@ -207,12 +215,13 @@ static ApiPropertyInfo deserialize_api_property_info(PayloadReader &r) {
     v.property = deserialize_property_info(r);
     v.setter = r.read_string_name();
     v.getter = r.read_string_name();
+    v.index = r.read_i32();
     return v;
 }
 
 static ApiOperatorInfo deserialize_operator_info(PayloadReader &r) {
     ApiOperatorInfo v;
-    v.name = r.read_string_name();
+    v.op = static_cast<Variant::Operator>(r.read_u32());
     v.return_type = static_cast<Variant::Type>(r.read_u32());
     v.left_type = static_cast<Variant::Type>(r.read_u32());
     v.right_type = static_cast<Variant::Type>(r.read_u32());
@@ -308,7 +317,7 @@ Error ApiStoreReader::read_builtin_class(const String &p_path, ApiBuiltinClass &
     r_data.is_keyed = r.read_bool();
     r_data.has_destructor = r.read_bool();
     deserialize_local_vector(r, r_data.members, deserialize_member_info);
-    deserialize_local_vector(r, r_data.constants, deserialize_constant_info);
+    deserialize_local_vector(r, r_data.constants, deserialize_builtin_class_constant_info);
     deserialize_local_vector(r, r_data.enums, deserialize_enum_info);
     // methods: special handling for ApiMethodInfo
     {
@@ -497,7 +506,7 @@ static ApiConstructorDocument deserialize_constructor_document(PayloadReader &r)
     return d;
 }
 
-Error ApiStoreReader::read_class_document(const godot::String &p_path, ApiClassDocument &r_data) {
+Error ApiStoreReader::read_document(const godot::String &p_path, ApiClassDocument &r_data) {
     PackedByteArray payload;
     Error err = read_payload_from_file(p_path, payload);
     if (err != OK) return err;
@@ -506,58 +515,43 @@ Error ApiStoreReader::read_class_document(const godot::String &p_path, ApiClassD
     r_data.brief_description = r.read_string();
     r_data.description = r.read_string();
     int32_t count;
+    // methods
     count = r.read_i32();
     r_data.methods.reserve(count);
     for (int32_t i = 0; i < count; i++) {
         r_data.methods.push_back(deserialize_method_document(r));
     }
+    // signals (Class only, BuiltInClass has none)
     count = r.read_i32();
     r_data.signals.reserve(count);
     for (int32_t i = 0; i < count; i++) {
         r_data.signals.push_back(deserialize_signal_document(r));
     }
+    // properties (both Class and BuiltInClass)
     count = r.read_i32();
     r_data.properties.reserve(count);
     for (int32_t i = 0; i < count; i++) {
         r_data.properties.push_back(deserialize_property_document(r));
     }
+    // enums
     count = r.read_i32();
     r_data.enums.reserve(count);
     for (int32_t i = 0; i < count; i++) {
         r_data.enums.push_back(deserialize_enum_document(r));
     }
-    return OK;
-}
-
-Error ApiStoreReader::read_builtin_class_document(const godot::String &p_path, ApiBuiltinClassDocument &r_data) {
-    PackedByteArray payload;
-    Error err = read_payload_from_file(p_path, payload);
-    if (err != OK) return err;
-    PayloadReader r(payload);
-    r_data.name = r.read_string();
-    r_data.brief_description = r.read_string();
-    r_data.description = r.read_string();
-    int32_t count;
-    count = r.read_i32();
-    r_data.methods.reserve(count);
-    for (int32_t i = 0; i < count; i++) {
-        r_data.methods.push_back(deserialize_method_document(r));
-    }
-    count = r.read_i32();
-    r_data.members.reserve(count);
-    for (int32_t i = 0; i < count; i++) {
-        r_data.members.push_back(deserialize_member_document(r));
-    }
+    // BuiltInClass-only: constants
     count = r.read_i32();
     r_data.constants.reserve(count);
     for (int32_t i = 0; i < count; i++) {
         r_data.constants.push_back(deserialize_constant_document(r));
     }
+    // BuiltInClass-only: operators
     count = r.read_i32();
     r_data.operators.reserve(count);
     for (int32_t i = 0; i < count; i++) {
         r_data.operators.push_back(deserialize_operator_document(r));
     }
+    // BuiltInClass-only: constructors
     count = r.read_i32();
     r_data.constructors.reserve(count);
     for (int32_t i = 0; i < count; i++) {

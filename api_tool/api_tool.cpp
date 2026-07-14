@@ -85,17 +85,9 @@ const ApiNativeStructure *find_native_structure(const StringName &p_name) {
 // Document query interface implementation (delegate to loader, no cache)
 // ============================================================================
 
-std::unique_ptr<ApiClassDocument> find_class_document(const StringName &p_name) {
+std::unique_ptr<ApiClassDocument> find_document(const StringName &p_name) {
 #ifdef TOOLS_ENABLED
-    return s_loader.find_class_document(p_name);
-#else // !TOOLS_ENABLED
-    return nullptr;
-#endif // TOOLS_ENABLED
-}
-
-std::unique_ptr<ApiBuiltinClassDocument> find_builtin_class_document(const StringName &p_name) {
-#ifdef TOOLS_ENABLED
-    return s_loader.find_builtin_class_document(p_name);
+    return s_loader.find_document(p_name);
 #else // !TOOLS_ENABLED
     return nullptr;
 #endif // TOOLS_ENABLED

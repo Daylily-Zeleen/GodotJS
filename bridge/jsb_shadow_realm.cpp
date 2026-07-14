@@ -65,7 +65,7 @@ static v8::Local<v8::String> _transfer_string(v8::Isolate *p_from_isolate, const
 		int len = p_from_str->WriteUtf8(p_from_isolate, buffer, 257);
 
 		const v8::Isolate::Scope isolate_scope1(p_to_isolate);
-		to_str = v8::String::NewFromUtf8(p_to_isolate, buffer, len).ToLocalChecked();
+		to_str = v8::String::NewFromUtf8(p_to_isolate, buffer, v8::NewStringType::kNormal, len).ToLocalChecked();
 	} else {
 		const int buffer_len = max_utf8_length + 1;
 		char *buffer = memnew_arr(char, buffer_len);
@@ -73,7 +73,7 @@ static v8::Local<v8::String> _transfer_string(v8::Isolate *p_from_isolate, const
 		int len = p_from_str->WriteUtf8(p_from_isolate, buffer, buffer_len);
 
 		const v8::Isolate::Scope isolate_scope1(p_from_isolate);
-		to_str = v8::String::NewFromUtf8(p_to_isolate, buffer, len).ToLocalChecked();
+		to_str = v8::String::NewFromUtf8(p_to_isolate, buffer, v8::NewStringType::kNormal, len).ToLocalChecked();
 
 		memdelete_arr(buffer);
 	}

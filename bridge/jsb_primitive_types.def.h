@@ -1,4 +1,11 @@
 
+// - NIL,
+// atomic types
+// - BOOL,
+// - INT,
+// - FLOAT,
+// - STRING,
+
 DEF(Vector2)
 DEF(Vector2i)
 DEF(Rect2)

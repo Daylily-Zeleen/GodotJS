@@ -148,7 +148,6 @@ namespace jsb::internal
                 Variant::COLOR,     // PACKED_COLOR_ARRAY
 #if GODOT_4_3_OR_NEWER
                 Variant::VECTOR4,   // PACKED_VECTOR4_ARRAY
-#endif
             };
             static_assert(Variant::VARIANT_MAX - Variant::PACKED_BYTE_ARRAY == std::size(mappings));
             jsb_check(p_type - Variant::PACKED_BYTE_ARRAY >= 0 && p_type - Variant::PACKED_BYTE_ARRAY < ::std::size(mappings));
@@ -175,6 +174,8 @@ namespace jsb::internal
         }
 
         static Variant structured_clone(const Variant& p_variant, ReferentialVariantMap<Variant>& p_clone_map, bool& r_valid, int p_recursion_count = 0);
+
+        static const String &get_variant_operator_name(Variant::Operator p_op);
     };
 }
 #endif

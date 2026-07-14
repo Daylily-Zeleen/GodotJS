@@ -23,7 +23,6 @@ struct ApiConstantInfo;
 struct ApiSingleton;
 struct ApiNativeStructure;
 struct ApiClassDocument;
-struct ApiBuiltinClassDocument;
 struct ApiUtilityFunctionDocument;
 struct ApiGlobalEnumDocument;
 struct ApiGlobalConstantDocument;
@@ -61,9 +60,9 @@ const ApiNativeStructure *find_native_structure(const godot::StringName &p_name)
 // ============================================================================
 // Document queries (no cache, direct file read, TOOLS_ENABLED only)
 // Returns std::unique_ptr<T> (caller owns). Returns nullptr if file missing/corrupted.
+// Unified query for both Class and BuiltInClass.
 // ============================================================================
-std::unique_ptr<ApiClassDocument> find_class_document(const godot::StringName &p_name);
-std::unique_ptr<ApiBuiltinClassDocument> find_builtin_class_document(const godot::StringName &p_name);
+std::unique_ptr<ApiClassDocument> find_document(const godot::StringName &p_name);
 std::unique_ptr<ApiUtilityFunctionDocument> find_utility_function_document(const godot::StringName &p_name);
 std::unique_ptr<ApiGlobalEnumDocument> find_global_enum_document(const godot::StringName &p_name);
 std::unique_ptr<ApiGlobalConstantDocument> find_global_constant_document(const godot::StringName &p_name);
@@ -72,6 +71,7 @@ std::unique_ptr<ApiGlobalConstantDocument> find_global_constant_document(const g
 // List all names
 // ============================================================================
 
+// TODO: 改用 godot::LocalVector<const StringName &>
 godot::PackedStringArray list_utility_functions();
 godot::PackedStringArray list_builtin_classes();
 godot::PackedStringArray list_classes();

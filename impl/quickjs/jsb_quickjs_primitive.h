@@ -53,7 +53,7 @@ namespace v8
         static Local<String> Empty(Isolate* isolate);
 
         // V8 string creation APIs
-        static MaybeLocal<String> NewFromUtf8(Isolate* isolate, const char* data, int length);
+        static MaybeLocal<String> NewFromUtf8(Isolate* isolate, const char* data, NewStringType /* type */, int length);
 
 
         // UTF-8 encoded characters.

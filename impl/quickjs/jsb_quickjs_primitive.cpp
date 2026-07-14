@@ -127,7 +127,7 @@ namespace v8
         return Local<String>(Data(isolate, jsb::impl::StackPos::EmptyString));
     }
 
-    MaybeLocal<String> String::NewFromUtf8(Isolate* isolate, const char* data, int length)
+    MaybeLocal<String> String::NewFromUtf8(Isolate* isolate, const char* data, NewStringType /* type */, int length)
     {
         JSContext* ctx = isolate->ctx();
         JSValue val = JS_NewStringLen(ctx, data, length < 0 ? (int)strlen(data) : length);

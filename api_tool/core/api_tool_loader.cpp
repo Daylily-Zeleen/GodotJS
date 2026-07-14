@@ -267,25 +267,22 @@ const ApiNativeStructure *ApiLoader::ensure_native_structure(const StringName &p
 // Document queries (no cache, direct file read, TOOLS_ENABLED only)
 // ============================================================================
 
-std::unique_ptr<ApiClassDocument> ApiLoader::find_class_document(const StringName &p_name) {
+std::unique_ptr<ApiClassDocument> ApiLoader::find_document(const StringName &p_name) {
 #ifdef TOOLS_ENABLED
+    // Try class first
     String path = base_dir_ + "/" + String(DIR_DOC_CLASSES) + "/" + String(p_name) + String(FILE_EXT_DOC);
     auto doc = std::make_unique<ApiClassDocument>();
-    Error err = ApiStoreReader::read_class_document(path, *doc);
-    if (err != OK) return nullptr;
-    return doc;
-#else
+    Error err = ApiStoreReader::read_document(path, *doc);
+    if (err == OK) {
+        return doc;
+    }
+    // Try builtin class
+    path = base_dir_ + "/" + String(DIR_DOC_BUILTIN_CLASSES) + "/" + String(p_name) + String(FILE_EXT_DOC);
+    err = ApiStoreReader::read_document(path, *doc);
+    if (err == OK) {
+        return doc;
+    }
     return nullptr;
-#endif
-}
-
-std::unique_ptr<ApiBuiltinClassDocument> ApiLoader::find_builtin_class_document(const StringName &p_name) {
-#ifdef TOOLS_ENABLED
-    String path = base_dir_ + "/" + String(DIR_DOC_BUILTIN_CLASSES) + "/" + String(p_name) + String(FILE_EXT_DOC);
-    auto doc = std::make_unique<ApiBuiltinClassDocument>();
-    Error err = ApiStoreReader::read_builtin_class_document(path, *doc);
-    if (err != OK) return nullptr;
-    return doc;
 #else
     return nullptr;
 #endif

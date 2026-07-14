@@ -23,8 +23,7 @@ public:
     static godot::Error read_singletons(const godot::String &p_path, godot::LocalVector<ApiSingleton> &r_data);
     static godot::Error read_native_structures(const godot::String &p_path, godot::LocalVector<ApiNativeStructure> &r_data);
 #ifdef TOOLS_ENABLED
-    static godot::Error read_class_document(const godot::String &p_path, ApiClassDocument &r_data);
-    static godot::Error read_builtin_class_document(const godot::String &p_path, ApiBuiltinClassDocument &r_data);
+    static godot::Error read_document(const godot::String &p_path, ApiClassDocument &r_data);
     static godot::Error read_utility_function_document(const godot::String &p_path, ApiUtilityFunctionDocument &r_data);
     static godot::Error read_global_enum_document(const godot::String &p_path, ApiGlobalEnumDocument &r_data);
     static godot::Error read_global_constant_document(const godot::String &p_path, ApiGlobalConstantDocument &r_data);

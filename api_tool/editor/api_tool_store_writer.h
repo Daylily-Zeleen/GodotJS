@@ -22,8 +22,7 @@ public:
     static godot::Error write_global_constant(const godot::String &p_path, const ApiConstantInfo &p_data);
     static godot::Error write_singletons(const godot::String &p_path, const godot::LocalVector<ApiSingleton> &p_data);
     static godot::Error write_native_structures(const godot::String &p_path, const godot::LocalVector<ApiNativeStructure> &p_data);
-    static godot::Error write_class_document(const godot::String &p_path, const ApiClassDocument &p_data);
-    static godot::Error write_builtin_class_document(const godot::String &p_path, const ApiBuiltinClassDocument &p_data);
+    static godot::Error write_document(const godot::String &p_path, const ApiClassDocument &p_data);
     static godot::Error write_utility_function_document(const godot::String &p_path, const ApiUtilityFunctionDocument &p_data);
     static godot::Error write_global_enum_document(const godot::String &p_path, const ApiGlobalEnumDocument &p_data);
     static godot::Error write_global_constant_document(const godot::String &p_path, const ApiGlobalConstantDocument &p_data);

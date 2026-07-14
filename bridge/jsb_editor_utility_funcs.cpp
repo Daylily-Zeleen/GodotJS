@@ -2,9 +2,8 @@
 #include "jsb_type_convert.h"
 #include "jsb_environment.h"
 #include "../internal/jsb_class_util.h"
-#include "../gen/utility_functions_ext.gen.h"
-#include "../gen/variant_builtin_ext.gen.h"
-#include "../gen/core_constants.gen.h" // TODO: 非编辑器是否需要？
+#include "../api_tool/api_tool.h"
+#include "../api_tool/api_tool_types.h"
 #if JSB_WITH_EDITOR_UTILITY_FUNCS
 #include "../weaver-editor/jsb_editor_plugin.h"
 #endif
@@ -18,8 +17,6 @@ namespace jsb_private
     template <typename T>                   bool get_member_name(const volatile T&);
     template <typename R, typename... Args> bool get_member_name(R (*)(Args...));
 }
-
-#define JSB_GET_FIELD_NAME_PRESET(InstName, ValueName) ((void)sizeof(jsb_private::get_member_name(std::decay_t<decltype(InstName)>::ValueName)), JSB_STRINGIFY(ValueName)), InstName.ValueName
 
 #define JSB_TYPE_BEGIN(InType) template<> struct OperatorRegister<InType>\
     {\
@@ -99,11 +96,9 @@ namespace jsb
             String name = method
                     ? internal::NamingUtil::get_parameter_name(property_info.name)
                     : internal::NamingUtil::get_member_name(property_info.name);
-            String info_class_name = property_info.class_name;
 
-            set_field(isolate, context, object, "name", name);
-            set_field(isolate, context, object, "type", property_info.type);
-
+            const String info_class_name = property_info.class_name;
+            String exposed_class_name {};
             if (info_class_name.find(".") >= 0)
             {
                 const PackedStringArray components = info_class_name.split(".", false);
@@ -112,22 +107,35 @@ namespace jsb
                 {
                     String class_name = internal::NamingUtil::get_class_name(components[0]);
                     String enum_name = internal::NamingUtil::get_enum_name(components[1]);
-                    set_field(isolate, context, object, "class_name", class_name + "." + enum_name);
+                    exposed_class_name = class_name + "." + enum_name;
                 }
                 else
                 {
                     // Should not occur
-                    set_field(isolate, context, object, "class_name", property_info.class_name);
+                    exposed_class_name = property_info.class_name;
                 }
             }
             else
             {
-                set_field(isolate, context, object, "class_name", internal::NamingUtil::get_class_name(property_info.class_name));
+                exposed_class_name = internal::NamingUtil::get_class_name(property_info.class_name);
             }
 
+            set_field(isolate, context, object, "name", name);
+            set_field(isolate, context, object, "type", property_info.type);
+            set_field(isolate, context, object, "class_name", exposed_class_name);
             set_field(isolate, context, object, "hint", property_info.hint);
             set_field(isolate, context, object, "hint_string", property_info.hint_string);
             set_field(isolate, context, object, "usage", property_info.usage);
+        }
+
+        void build_property_setget_info(v8::Isolate* isolate, const v8::Local<v8::Context>& context, const api_tool::ApiPropertyInfo &api_prop, const v8::Local<v8::Object>& object)
+        {
+            set_field(isolate, context, object, "internal_name", api_prop.property.name);
+            set_field(isolate, context, object, "name", internal::NamingUtil::get_member_name(api_prop.property.name));
+            set_field(isolate, context, object, "type", api_prop.property.type);
+            set_field(isolate, context, object, "index", api_prop.index);
+            set_field(isolate, context, object, "setter", internal::NamingUtil::get_member_name(api_prop.setter));
+            set_field(isolate, context, object, "getter", internal::NamingUtil::get_member_name(api_prop.getter));
         }
 
         void build_property_default_value(v8::Isolate* isolate, const v8::Local<v8::Context>& context, const Variant& property_value, Variant::Type property_type, const v8::Local<v8::Object>& object)
@@ -148,54 +156,13 @@ namespace jsb
             set_field(isolate, context, object, "value", val);
         }
 
-        struct FPrimitiveGetSetInfo
+        void build_constructor_info(v8::Isolate* isolate, const v8::Local<v8::Context>& context, const api_tool::ApiConstructorInfo& api_constructor, const v8::Local<v8::Object>& object)
         {
-            StringName name;
-            Variant::Type type;
-        };
-
-        struct FArgumentInfo
-        {
-            String name;
-            Variant::Type type;
-        };
-
-        struct FConstructorInfo
-        {
-            Vector<FArgumentInfo> arguments;
-        };
-
-        void build_property_info(v8::Isolate* isolate, const v8::Local<v8::Context>& context, const StringName& property_name, const FPrimitiveGetSetInfo& property_info, const v8::Local<v8::Object>& object)
-        {
-            set_field(isolate, context, object, "name", internal::NamingUtil::get_member_name(property_name));
-            set_field(isolate, context, object, "type", property_info.type);
-        }
-
-        struct FPropertySetGetInfo
-        {
-            Variant::Type type;
-            int32_t index;
-            StringName setter;
-            StringName getter;
-        };
-
-        void build_property_info(v8::Isolate* isolate, const v8::Local<v8::Context>& context, const StringName& property_name, const FPropertySetGetInfo& getset_info, const v8::Local<v8::Object>& object)
-        {
-            set_field(isolate, context, object, "internal_name", property_name);
-            set_field(isolate, context, object, "name", internal::NamingUtil::get_member_name(property_name));
-            set_field(isolate, context, object, "type", getset_info.type);
-            // set_field(isolate, context, object, "index", getset_info.index); // 移除该字段：GDExtension 无法通过 ClassDB 获取该信息，并且代码生成也不涉及该字段
-            set_field(isolate, context, object, "setter", internal::NamingUtil::get_member_name(getset_info.setter));
-            set_field(isolate, context, object, "getter", internal::NamingUtil::get_member_name(getset_info.getter));
-        }
-
-        void build_constructor_info(v8::Isolate* isolate, const v8::Local<v8::Context>& context, const FConstructorInfo& constructor_info, const v8::Local<v8::Object>& object)
-        {
-            const int argc = constructor_info.arguments.size();
+            const int argc = api_constructor.arguments.size();
             v8::Local<v8::Array> args_obj = v8::Array::New(isolate, argc);
             for (int index = 0; index < argc; ++index)
             {
-                const FArgumentInfo& argument_info = constructor_info.arguments[index];
+                const PropertyInfo& argument_info = api_constructor.arguments[index];
                 v8::Local<v8::Object> arg_obj = v8::Object::New(isolate);
                 set_field(isolate, context, arg_obj, "name", internal::NamingUtil::get_parameter_name(argument_info.name));
                 set_field(isolate, context, arg_obj, "type", argument_info.type);
@@ -204,7 +171,7 @@ namespace jsb
             set_field(isolate, context, object, "arguments", args_obj);
         }
 
-        void build_method_info(v8::Isolate* isolate, const v8::Local<v8::Context>& context, const MethodInfo& method_info, bool has_return_value, const v8::Local<v8::Object>& object)
+        void build_method_info(v8::Isolate* isolate, const v8::Local<v8::Context>& context, const MethodInfo& method_info, const v8::Local<v8::Object>& object)
         {
             set_field(isolate, context, object, "internal_name", method_info.name);
             set_field(isolate, context, object, "id", method_info.id);
@@ -217,6 +184,10 @@ namespace jsb
             set_field(isolate, context, object, "argument_count", method_info.arguments.size());
 
             // write type info for `return`
+            const bool has_return_value =
+                    method_info.return_val.type != Variant::NIL
+                || (method_info.return_val.usage & PROPERTY_USAGE_NIL_IS_VARIANT);
+
             if (has_return_value)
             {
                 const PropertyInfo& return_info = method_info.return_val;
@@ -261,210 +232,141 @@ namespace jsb
             }
         }
 
-        struct FEnumInfo // TODO: 待移除
+        void build_enum_info(v8::Isolate* isolate, const v8::Local<v8::Context>& context, const api_tool::ApiEnumInfo &api_enum, const v8::Local<v8::Object>& enum_object)
         {
-            HashMap<StringName, int64_t> values;
-            bool is_bitfield = false;
-        };
-
-        void build_enum_info(v8::Isolate* isolate, const v8::Local<v8::Context>& context, const StringName &enum_name, const FEnumInfo& enum_info, const v8::Local<v8::Object>& object)
-        {
-            v8::Local<v8::Object> values_object = v8::Object::New(isolate);
-            for (const auto &E : enum_info.values)
+            v8::Local<v8::Object> literals_obj = v8::Object::New(isolate);
+            for (const auto &E : api_enum.values)
             {
-                const String name = E.key;
+                const String &name = E.name;
                 const int value = E.value;
-                values_object->Set(context, impl::Helper::new_string(isolate, name), v8::Number::New(isolate, value)).Check();
+                literals_obj->Set(context, impl::Helper::new_string(isolate, name), v8::Number::New(isolate, value)).Check();
             }
-            set_field(isolate, context, object, "literals", values_object);
-            set_field(isolate, context, object, JSB_GET_FIELD_NAME_PRESET(enum_info, is_bitfield));
+            set_field(isolate, context, enum_object, "name", internal::NamingUtil::get_enum_name(api_enum.name));
+            set_field(isolate, context, enum_object, "literals", literals_obj);
+            set_field(isolate, context, enum_object, "is_bitfield", api_enum.is_bitfield);
         }
 
-        void build_signal_info(v8::Isolate* isolate, const v8::Local<v8::Context>& context, const MethodInfo& method_info, const v8::Local<v8::Object>& signal_obj)
+        void build_signal_info(v8::Isolate* isolate, const v8::Local<v8::Context>& context, const api_tool::ApiSignalInfo& signal_info, const v8::Local<v8::Object>& signal_obj)
         {
+            set_field(isolate, context, signal_obj, "internal_name", signal_info.name);
+            set_field(isolate, context, signal_obj, "name", internal::NamingUtil::get_member_name(signal_info.name));
             v8::Local<v8::Object> method_obj = v8::Object::New(isolate);
 
-            build_method_info(isolate, context, method_info, false, method_obj);
+            godot::MethodInfo method_info;
+            method_info.name = signal_info.name;
+            method_info.arguments = signal_info.arguments;
+            build_method_info(isolate, context, method_info, method_obj);
             set_field(isolate, context, signal_obj, "method_", method_obj);
+        }
+
+        void build_builtin_class_constant(v8::Isolate *isolate, const v8::Local<v8::Context> &context, const api_tool::ApiBuiltInClassConstantInfo &api_builtin_class_constant, const v8::Local<v8::Object> &builtin_class_constant_obj)
+        {
+            set_field(isolate, context, builtin_class_constant_obj, "name", api_builtin_class_constant.name);
+            set_field(isolate, context, builtin_class_constant_obj, "type", api_builtin_class_constant.type);
+            const Variant constant_value = api_builtin_class_constant.value;
+            // TODO: 所有类型！
+            switch (api_builtin_class_constant.type)
+            {
+            case Variant::BOOL: set_field(isolate, context, builtin_class_constant_obj, "value", (bool) constant_value); break;
+            case Variant::INT: set_field(isolate, context, builtin_class_constant_obj, "value", (int64_t) constant_value); break;
+            case Variant::FLOAT: set_field(isolate, context, builtin_class_constant_obj, "value", (double) constant_value); break;
+            default: break;
+            }
         }
 
         v8::Local<v8::Object> build_class_info(v8::Isolate* isolate, const v8::Local<v8::Context>& context, const StringName& class_name, const HashSet<StringName>* class_rpc_methods)
         {
             v8::Local<v8::Object> class_info_obj = v8::Object::New(isolate);
-            ClassDBSingleton* classdb = ClassDBSingleton::get_singleton();
-            jsb_check(classdb->class_exists(class_name));
 
-            set_field(isolate, context, class_info_obj, "name", internal::NamingUtil::get_class_name(class_name));
-            set_field(isolate, context, class_info_obj, "internal_name", class_name);
-            set_field(isolate, context, class_info_obj, "super", classdb->get_parent_class(class_name));
+            // Get class data from api_tool
+            const api_tool::ApiClass* api_class = api_tool::find_class(class_name);
+            if (!api_class) {
+                return class_info_obj;
+            }
+
+            set_field(isolate, context, class_info_obj, "name", internal::NamingUtil::get_class_name(api_class->name));
+            set_field(isolate, context, class_info_obj, "internal_name", api_class->name);
+            set_field(isolate, context, class_info_obj, "super", api_class->inherits);
+
+            // set_field(isolate, context, class_info_obj, "is_refcounted", api_class->is_refcounted);
+            // set_field(isolate, context, class_info_obj, "is_instantiable", api_class->is_instantiable);
 
 #if JSB_EXCLUDE_GETSET_METHODS
             HashSet<StringName> omitted_methods;
 #endif
             // class: properties
             {
-                godot::LocalVector<Pair<PropertyInfo,FPropertySetGetInfo>> validated_properties;
-                {
-                    HashMap<StringName, LocalVector<PropertyInfo>> getter_of_properties;
-                    HashMap<StringName, LocalVector<PropertyInfo>> setter_of_properties;
-                    for (const Dictionary& prop_dict : classdb->class_get_property_list(class_name, true)){
-                        const PropertyInfo &prop_info = PropertyInfo::from_dict(prop_dict);
-                        if (internal::StringNames::get_singleton().is_ignored(prop_info.name)) continue;
-                        const StringName getter = classdb->class_get_property_getter(class_name, prop_info.name);
-                        const StringName setter = classdb->class_get_property_setter(class_name, prop_info.name);
-                        if (getter.is_empty() && setter.is_empty()) continue; // 假定至少需要一个访问器才可作为属性（读写、只读、只写）
-                        if (!getter.is_empty()) {auto & list = getter_of_properties[setter]; list.push_back(prop_info);}
-                        if (!setter.is_empty()) {auto & list = setter_of_properties[setter]; list.push_back(prop_info);}
-
-                        validated_properties.push_back({prop_info, {
-                            .type = prop_info.type,
-                            .indexed = -1,
-                            .setter = setter,
-                            .getter = getter,
-                        }});
-                    }
-                    for (auto &pair:validated_properties) {
-                        FPropertySetGetInfo &getset_info = pair.second;
-                        getset_info.indexed = (!getset_info.getter.is_empty() && getter_of_properties[getset_info.getter].size() > 1)
-                            || (!getset_info.setter.is_empty() && setter_of_properties[getset_info.setter].size() > 1);
-                        getset_info.indexed = indexed? 0: -1; // TODO: 处理成正确的属性访问器索引参数
-                    }
-                }
-
                 JSB_HANDLE_SCOPE(isolate);
-                // intentionally new array without a length from `class_info.property_setget.size()`,
-                // because ignoring items causes holes in the "properties" array which would be `undefined`
-                v8::Local<v8::Array> properties_obj = v8::Array::New(isolate, validated_properties.size());
+                v8::Local<v8::Array> properties_obj = v8::Array::New(isolate, (int) api_class->properties.size());
                 set_field(isolate, context, class_info_obj, "properties", properties_obj);
                 int index = 0;
-                for (const auto &[prop_info, getset_info]: validated_properties) {
+                for (const auto& api_prop : api_class->properties) {
                     JSB_HANDLE_SCOPE(isolate);
-
-                    v8::Local<v8::Object> getset_info_obj = v8::Object::New(isolate);
                     v8::Local<v8::Object> property_info_obj = v8::Object::New(isolate);
-                    set_field(isolate, context, getset_info_obj, "info", property_info_obj);
-                    build_property_info(isolate, context, prop_info, property_info_obj, false);
-                    build_property_info(isolate, context, prop_info.name, getset_info, getset_info_obj);
-                    properties_obj->Set(context, index++, getset_info_obj).Check();
+                    v8::Local<v8::Object> property_setget_info_obj = v8::Object::New(isolate);
+                    set_field(isolate, context, property_setget_info_obj, "info", property_info_obj);
+                    build_property_info(isolate, context, api_prop.property, property_info_obj, false);
+                    build_property_setget_info(isolate, context, api_prop, property_setget_info_obj);
+
+                    properties_obj->Set(context, index++, property_setget_info_obj).Check();
 #if JSB_EXCLUDE_GETSET_METHODS
                     // 仅非 index 访问的属性其访问器能够被后续忽略。
-                    if (getset_info.index >= 0) {
-                        if (internal::VariantUtil::is_valid_name(getset_info.getter)) omitted_methods.insert(getset_info.getter);
-                        if (internal::VariantUtil::is_valid_name(getset_info.setter)) omitted_methods.insert(getset_info.setter);
+                    if (api_prop.index >= 0) {
+                        if (internal::VariantUtil::is_valid_name(api_prop.getter)) omitted_methods.insert(api_prop.getter);
+                        if (internal::VariantUtil::is_valid_name(api_prop.setter)) omitted_methods.insert(api_prop.setter);
                     }
 #endif
                 }
             }
 
-            // class: methods
+            // class: methods/ rpc methods / virtual methods
             {
                 JSB_HANDLE_SCOPE(isolate);
-                TypedArray<Dictionary> method_list = classdb->class_get_method_list(class_name, true);
 #if JSB_EXCLUDE_GETSET_METHODS
                 constexpr int len = 0;
 #else
-                const int len = (int) method_list.size();
+                const int len = (int) api_class->methods.size();
 #endif
+                const v8::Local<v8::Array> rpc_methods_obj = v8::Array::New(isolate);
+                const v8::Local<v8::Array> virtual_methods_obj = v8::Array::New(isolate);
                 const v8::Local<v8::Array> methods_obj = v8::Array::New(isolate, len);
+                set_field(isolate, context, class_info_obj, "rpc_methods", rpc_methods_obj);
+                set_field(isolate, context, class_info_obj, "virtual_methods", virtual_methods_obj);
                 set_field(isolate, context, class_info_obj, "methods", methods_obj);
-                int index = 0;
-                for (const Dictionary &method_dict : method_list)
-                {
-                    const MethodInfo method_info = MethodInfo::from_dict(method_dict);
+                int virtual_methods_index = 0;
+                int rpc_methods_index = 0;
+                int methods_index = 0;
+
+                for (const auto& api_method : api_class->methods) {
+                    const godot::MethodInfo& method_info = api_method.method;
+                    uint32_t flags = method_info.flags;
+                    bool is_virtual = flags & (METHOD_FLAG_VIRTUAL | METHOD_FLAG_VIRTUAL_REQUIRED);
+                    bool is_rpc = class_rpc_methods && ((flags & METHOD_FLAG_STATIC) == 0) && (class_rpc_methods->has(method_info.name) || class_rpc_methods->has(internal::NamingUtil::get_member_name(method_info.name)));
 #if JSB_EXCLUDE_GETSET_METHODS
-                    if (omitted_methods.has(method_info.name)) continue;
+                    if (!is_virtual && !is_rpc && omitted_methods.has(api_method.method.name)) continue;
 #endif
                     JSB_HANDLE_SCOPE(isolate);
-                    const bool has_return_value =
-                        method_info.return_val.type != Variant::NIL
-                    || (method_info.return_val.usage & PROPERTY_USAGE_NIL_IS_VARIANT);
                     v8::Local<v8::Object> method_info_obj = v8::Object::New(isolate);
-                    build_method_info(isolate, context, method_info, has_return_value, method_info_obj);
-                    methods_obj->Set(context, index++, method_info_obj).Check();
-                }
-            }
-
-            // class: rpc methods
-            {
-                JSB_HANDLE_SCOPE(isolate);
-
-                v8::Local<v8::Array> rpc_methods_obj = v8::Array::New(isolate);
-                set_field(isolate, context, class_info_obj, "rpc_methods", rpc_methods_obj);
-
-                if (class_rpc_methods)
-                {
-                    TypedArray<Dictionary> method_list = classdb->class_get_method_list(class_name, true);
-                    int index = 0;
-
-                    for (const Dictionary& method_dict : method_list)
-                    {
-                        const MethodInfo method_info = MethodInfo::from_dict(method_dict);
-
-                        if (method_info.flags & METHOD_FLAG_STATIC)
-                        {
-                            continue;
-                        }
-
-                        const StringName exposed_method_name = internal::NamingUtil::get_member_name(method_info.name);
-
-                        if (!class_rpc_methods->has(method_info.name) && !class_rpc_methods->has(exposed_method_name))
-                        {
-                            continue;
-                        }
-
-                        JSB_HANDLE_SCOPE(isolate);
-                        const bool has_return_value =
-                            method_info.return_val.type != Variant::NIL
-                        || (method_info.return_val.usage & PROPERTY_USAGE_NIL_IS_VARIANT);
-                        v8::Local<v8::Object> method_info_obj = v8::Object::New(isolate);
-                        build_method_info(isolate, context, method_info, has_return_value, method_info_obj);
-                        rpc_methods_obj->Set(context, index++, method_info_obj).Check();
-                    }
-                }
-            }
-
-            // class: gd virtual methods
-            {
-                JSB_HANDLE_SCOPE(isolate);
-                TypedArray<Dictionary> method_list = classdb->class_get_method_list(class_name, true);
-                v8::Local<v8::Array> virtual_methods_obj = v8::Array::New(isolate);
-                set_field(isolate, context, class_info_obj, "virtual_methods", virtual_methods_obj);
-                int index = 0;
-                for (const Dictionary& method_dict: method_list)
-                {
-                    const MethodInfo method_info = MethodInfo::from_dict(method_dict);
-                    if ((method_info.flags & (METHOD_FLAG_VIRTUAL | METHOD_FLAG_VIRTUAL_REQUIRED)) == 0) continue;
-                    JSB_HANDLE_SCOPE(isolate);
-                    v8::Local<v8::Object> method_info_obj = v8::Object::New(isolate);
-                    const bool has_return_value =
-                        method_info.return_val.type != Variant::NIL
-                    || (method_info.return_val.usage & PROPERTY_USAGE_NIL_IS_VARIANT);
-                    build_method_info(isolate, context, method_info, has_return_value, method_info_obj);
-                    virtual_methods_obj->Set(context, index++, method_info_obj).Check();
+                    build_method_info(isolate, context, method_info, method_info_obj);
+                    if (is_virtual) virtual_methods_obj->Set(context, virtual_methods_index++, method_info_obj).Check();
+                    if (is_rpc) rpc_methods_obj->Set(context, rpc_methods_index++, method_info_obj).Check();
+#if JSB_EXCLUDE_GETSET_METHODS
+                    if (omitted_methods.has(api_method.method.name)) continue;
+#endif
+                    methods_obj->Set(context, methods_index++, method_info_obj).Check();
                 }
             }
 
             // class: enums
             {
                 JSB_HANDLE_SCOPE(isolate);
-                PackedStringArray enum_list = classdb->class_get_enum_list(class_name, true);
-                v8::Local<v8::Array> enums_obj = v8::Array::New(isolate, (int) enum_list.size());
+                v8::Local<v8::Array> enums_obj = v8::Array::New(isolate, (int) api_class->enums.size());
                 set_field(isolate, context, class_info_obj, "enums", enums_obj);
                 int index = 0;
-                for (const StringName& enum_name: enum_list)
-                {
+                for (const auto& api_enum : api_class->enums) {
                     JSB_HANDLE_SCOPE(isolate);
-                    PackedStringArray enum_constants = classdb->class_get_enum_constants(class_name, enum_name, true);
-                    FEnumInfo enum_info;
-                    enum_info.is_bitfield = classdb->is_class_enum_bitfield(class_name, enum_name, true);
-                    for (const StringName& constant_name : enum_constants)
-                    {
-                        int64_t constant_value = classdb->class_get_integer_constant(class_name, constant_name);
-                        enum_info.values.insert(constant_name, constant_value);
-                    }
                     v8::Local<v8::Object> enum_info_obj = v8::Object::New(isolate);
-                    set_field(isolate, context, enum_info_obj, "name", internal::NamingUtil::get_enum_name(enum_name));
-                    build_enum_info(isolate, context, enum_name, enum_info, enum_info_obj);
+                    build_enum_info(isolate, context, api_enum, enum_info_obj);
                     enums_obj->Set(context, index++, enum_info_obj).Check();
                 }
             }
@@ -472,17 +374,14 @@ namespace jsb
             // class: constants (int only)
             {
                 JSB_HANDLE_SCOPE(isolate);
-                PackedStringArray constant_list = classdb->class_get_integer_constant_list(class_name, true);
-                v8::Local<v8::Array> constants_obj = v8::Array::New(isolate, (int) constant_list.size());
+                v8::Local<v8::Array> constants_obj = v8::Array::New(isolate, (int) api_class->constants.size());
                 set_field(isolate, context, class_info_obj, "constants", constants_obj);
                 int index = 0;
-                for (const StringName& constant_name : constant_list)
-                {
+                for (const auto& constant : api_class->constants) {
                     JSB_HANDLE_SCOPE(isolate);
-                    int64_t constant_value = classdb->class_get_integer_constant(class_name, constant_name);
                     v8::Local<v8::Object> constant_info_obj = v8::Object::New(isolate);
-                    set_field(isolate, context, constant_info_obj, "name", internal::NamingUtil::get_constant_name(constant_name));
-                    set_field(isolate, context, constant_info_obj, "value", constant_value);
+                    set_field(isolate, context, constant_info_obj, "name", internal::NamingUtil::get_constant_name(constant.name));
+                    set_field(isolate, context, constant_info_obj, "value", constant.value);
                     constants_obj->Set(context, index++, constant_info_obj).Check();
                 }
             }
@@ -490,20 +389,13 @@ namespace jsb
             // class: signals
             {
                 JSB_HANDLE_SCOPE(isolate);
-                TypedArray<Dictionary> signal_list = classdb->class_get_signal_list(class_name, true);
-                v8::Local<v8::Array> signals_obj = v8::Array::New(isolate, (int) signal_list.size());
+                v8::Local<v8::Array> signals_obj = v8::Array::New(isolate, (int) api_class->signals.size());
                 set_field(isolate, context, class_info_obj, "signals", signals_obj);
                 int index = 0;
-                for (const Dictionary& signal_dict : signal_list)
-                {
+                for (const auto& api_signal : api_class->signals) {
                     JSB_HANDLE_SCOPE(isolate);
-                    const MethodInfo method_info = MethodInfo::from_dict(signal_dict);
-                    const StringName &signal_name = method_info.name;
-
                     v8::Local<v8::Object> signal_info_obj = v8::Object::New(isolate);
-                    set_field(isolate, context, signal_info_obj, "internal_name", signal_name);
-                    set_field(isolate, context, signal_info_obj, "name", internal::NamingUtil::get_member_name(signal_name));
-                    build_signal_info(isolate, context, method_info, signal_info_obj);
+                    build_signal_info(isolate, context, api_signal, signal_info_obj);
                     signals_obj->Set(context, index++, signal_info_obj).Check();
                 }
             }
@@ -588,36 +480,32 @@ namespace jsb
     static v8::Local<v8::Value> generate_primitive_type(v8::Isolate* isolate, const v8::Local<v8::Context>& context)
     {
         constexpr static Variant::Type TYPE = (Variant::Type)GetTypeInfo<T>::VARIANT_TYPE;
+        const StringName type_name = Variant::get_type_name(TYPE);
+        const api_tool::ApiBuiltinClass* builtin_class = api_tool::find_builtin_class(type_name);
+        jsb_check(builtin_class);
+
         v8::Local<v8::Object> class_info_obj = v8::Object::New(isolate);
         set_field(isolate, context, class_info_obj, "name", internal::NamingUtil::get_class_name(Variant::get_type_name(TYPE)));
         set_field(isolate, context, class_info_obj, "type", TYPE);
-        if (VariantExt::has_indexing(TYPE))
-        {
-            set_field(isolate, context, class_info_obj, "element_type", VariantExt::get_indexed_element_type(TYPE));
+
+        if (builtin_class->has_indexing_return_type) {
+            set_field(isolate, context, class_info_obj, "element_type", builtin_class->indexing_type);
         }
-        set_field(isolate, context, class_info_obj, "is_keyed", VariantExt::is_keyed(TYPE));
+        set_field(isolate, context, class_info_obj, "is_keyed", builtin_class->is_keyed);
 
         // constructors
         {
             JSB_HANDLE_SCOPE(isolate);
 
-            const int constructor_count = VariantExt::get_constructor_count(TYPE);
-            v8::Local<v8::Array> constructors_obj = v8::Array::New(isolate, constructor_count);
+            v8::Local<v8::Array> constructors_obj = v8::Array::New(isolate, (int) builtin_class->constructors.size());
             set_field(isolate, context, class_info_obj, "constructors", constructors_obj);
-            for (int constructor_index = 0; constructor_index < constructor_count; ++constructor_index)
+            int constructor_index = 0;
+            for (const auto& api_constructor: builtin_class->constructors)
             {
                 JSB_HANDLE_SCOPE(isolate);
-                const int argc = VariantExt::get_constructor_argument_count(TYPE, constructor_index);
-                FConstructorInfo constructor_info;
-                for (int argument_index = 0; argument_index < argc; ++argument_index)
-                {
-                    const String argument_name = VariantExt::get_constructor_argument_name(TYPE, constructor_index, argument_index);
-                    const Variant::Type argument_type = VariantExt::get_constructor_argument_type(TYPE, constructor_index, argument_index);
-                    constructor_info.arguments.append({ argument_name, argument_type });
-                }
                 v8::Local<v8::Object> constructor_obj = v8::Object::New(isolate);
-                build_constructor_info(isolate, context, constructor_info, constructor_obj);
-                constructors_obj->Set(context, constructor_index, constructor_obj).Check();
+                build_constructor_info(isolate, context, api_constructor, constructor_obj);
+                constructors_obj->Set(context, constructor_index++, constructor_obj).Check();
             }
         }
 
@@ -625,21 +513,15 @@ namespace jsb
         {
             JSB_HANDLE_SCOPE(isolate);
 
-            List<StringName> members;
-            VariantExt::get_member_list(TYPE, &members);
-            v8::Local<v8::Array> members_obj = v8::Array::New(isolate, members.size());
+            v8::Local<v8::Array> members_obj = v8::Array::New(isolate, (int) builtin_class->members.size());
             set_field(isolate, context, class_info_obj, "properties", members_obj);
             int index = 0;
-            for (const StringName& property_name : members)
-            {
+            for (const auto& api_member : builtin_class->members) {
                 JSB_HANDLE_SCOPE(isolate);
-                // in order to reuse `build_property_info`, wrap it as a `PropertySetGet`
-                FPrimitiveGetSetInfo property_info;
-                property_info.name = property_name;
-                property_info.type = VariantExt::get_member_type(TYPE, property_name);
-                v8::Local<v8::Object> property_info_obj = v8::Object::New(isolate);
-                build_property_info(isolate, context, property_name, property_info, property_info_obj);
-                members_obj->Set(context, index++, property_info_obj).Check();
+                v8::Local<v8::Object> member_object = v8::Object::New(isolate);
+                set_field(isolate, context, member_object, "name", internal::NamingUtil::get_member_name(api_member.name));
+                set_field(isolate, context, member_object, "type", api_member.type);
+                members_obj->Set(context, index++, member_object).Check();
             }
         }
 
@@ -647,33 +529,15 @@ namespace jsb
         {
             JSB_HANDLE_SCOPE(isolate);
 
-            List<StringName> methods;
-            VariantExt::get_builtin_method_list(TYPE, &methods);
-            v8::Local<v8::Array> methods_obj = v8::Array::New(isolate, (int) methods.size());
+            v8::Local<v8::Array> methods_obj = v8::Array::New(isolate, (int) builtin_class->methods.size());
             set_field(isolate, context, class_info_obj, "methods", methods_obj);
             int index = 0;
-            for (const StringName& name : methods)
+            for (const auto& api_method : builtin_class->methods)
             {
                 JSB_HANDLE_SCOPE(isolate);
-                MethodInfo method_info;
-                method_info.name = name;
-                method_info.flags = 0;
-                if (VariantExt::is_builtin_method_vararg(TYPE, name)) method_info.flags |= METHOD_FLAG_VARARG;
-                method_info.return_val.type = VariantExt::get_builtin_method_return_type(TYPE, name);
-                for (int i = 0, n = VariantExt::get_builtin_method_argument_count(TYPE, name); i < n; ++i)
-                {
-                    PropertyInfo prop_info;
-                    prop_info.name = VariantExt::get_builtin_method_argument_name(TYPE, name, i);
-                    prop_info.type = VariantExt::get_builtin_method_argument_type(TYPE, name, i);
-                    method_info.arguments.push_back(prop_info);
-                }
-                method_info.default_arguments = VariantExt::get_builtin_method_default_arguments(TYPE, name);
-                if (VariantExt::is_builtin_method_const(TYPE, name)) method_info.flags |= METHOD_FLAG_CONST;
-                if (VariantExt::is_builtin_method_static(TYPE, name)) method_info.flags |= METHOD_FLAG_STATIC;
-                if (VariantExt::is_builtin_method_vararg(TYPE, name)) method_info.flags |= METHOD_FLAG_VARARG;
-                const bool has_return_value = VariantExt::has_builtin_method_return_value(TYPE, name);
+                const godot::MethodInfo& method_info = api_method.method;
                 v8::Local<v8::Object> method_info_obj = v8::Object::New(isolate);
-                build_method_info(isolate, context, method_info, has_return_value, method_info_obj);
+                build_method_info(isolate, context, method_info, method_info_obj);
                 methods_obj->Set(context, index++, method_info_obj).Check();
             }
         }
@@ -682,34 +546,32 @@ namespace jsb
         {
             JSB_HANDLE_SCOPE(isolate);
 
-            v8::Local<v8::Array> operators_obj = v8::Array::New(isolate);
+            v8::Local<v8::Array> operators_obj = v8::Array::New(isolate, (int) builtin_class->operators.size());
             set_field(isolate, context, class_info_obj, "operators", operators_obj);
-            OperatorRegister<T>::generate(context, operators_obj);
+            int index = 0;
+            for (const auto& op : builtin_class->operators) {
+                JSB_HANDLE_SCOPE(isolate);
+                v8::Local<v8::Object> obj = v8::Object::New(isolate);
+                set_field(isolate, context, obj, "name", jsb::internal::VariantUtil::get_variant_operator_name(op.op));
+                set_field(isolate, context, obj, "return_type", (int) op.return_type);
+                set_field(isolate, context, obj, "left_type", (int) op.left_type);
+                set_field(isolate, context, obj, "right_type", (int) op.right_type);
+                operators_obj->Set(context, index++, obj).Check();
+            }
         }
 
         // enums
         {
             JSB_HANDLE_SCOPE(isolate);
 
-            List<StringName> enums;
-            VariantExt::get_enums_for_type(TYPE, &enums);
-            v8::Local<v8::Array> enums_obj = v8::Array::New(isolate, (int) enums.size());
+            v8::Local<v8::Array> enums_obj = v8::Array::New(isolate, (int) builtin_class->enums.size());
             set_field(isolate, context, class_info_obj, "enums", enums_obj);
             int index = 0;
-            for (const StringName& enum_name : enums)
+            for (const auto& api_enum : builtin_class->enums)
             {
                 JSB_HANDLE_SCOPE(isolate);
-                List<StringName> enumerations;
-                VariantExt::get_enumerations_for_enum(TYPE, enum_name, &enumerations);
-                FEnumInfo enum_info;
-                for (const StringName& enumeration : enumerations)
-                {
-                    const int enum_value = VariantExt::get_enum_value(TYPE, enum_name, enumeration);
-                    enum_info.values.insert(enumeration, enum_value);
-                }
                 v8::Local<v8::Object> enum_info_obj = v8::Object::New(isolate);
-                set_field(isolate, context, enum_info_obj, "name", enum_name);
-                build_enum_info(isolate, context, enum_name, enum_info, enum_info_obj);
+                build_enum_info(isolate, context, api_enum, enum_info_obj);
                 enums_obj->Set(context, index++, enum_info_obj).Check();
             }
         }
@@ -718,26 +580,14 @@ namespace jsb
         {
             JSB_HANDLE_SCOPE(isolate);
 
-            List<StringName> constants;
-            VariantExt::get_constants_for_type(TYPE, &constants);
-            v8::Local<v8::Array> constants_obj = v8::Array::New(isolate, (int) constants.size());
+            v8::Local<v8::Array> constants_obj = v8::Array::New(isolate, (int) builtin_class->constants.size());
             set_field(isolate, context, class_info_obj, "constants", constants_obj);
             int index = 0;
-            for (const StringName& constant : constants)
+            for (const auto& api_builtin_class_constant : builtin_class->constants)
             {
                 JSB_HANDLE_SCOPE(isolate);
                 v8::Local<v8::Object> constant_info_obj = v8::Object::New(isolate);
-                const Variant constant_value = VariantExt::get_constant_value(TYPE, constant);
-
-                set_field(isolate, context, constant_info_obj, "name", constant);
-                set_field(isolate, context, constant_info_obj, "type", constant_value.get_type());
-                switch (constant_value.get_type())
-                {
-                case Variant::BOOL: set_field(isolate, context, constant_info_obj, "value", (bool) constant_value); break;
-                case Variant::INT: set_field(isolate, context, constant_info_obj, "value", (int64_t) constant_value); break;
-                case Variant::FLOAT: set_field(isolate, context, constant_info_obj, "value", (double) constant_value); break;
-                default: break;
-                }
+                build_builtin_class_constant(isolate, context, api_builtin_class_constant, constant_info_obj);
                 constants_obj->Set(context, index++, constant_info_obj).Check();
             }
         }
@@ -750,35 +600,41 @@ namespace jsb
     static v8::Local<v8::Value> generate_primitive_type_utilities(v8::Isolate* isolate, const v8::Local<v8::Context>& context)
     {
         constexpr static Variant::Type TYPE = (Variant::Type)GetTypeInfo<T>::VARIANT_TYPE;
+        const StringName type_name = Variant::get_type_name(TYPE);
+        const api_tool::ApiBuiltinClass* builtin_class = api_tool::find_builtin_class(type_name);
+        jsb_check(builtin_class);
+
         v8::Local<v8::Object> class_info_obj = v8::Object::New(isolate);
         String class_name = internal::NamingUtil::get_class_name(Variant::get_type_name(TYPE));
         set_field(isolate, context, class_info_obj, "name", class_name);
         set_field(isolate, context, class_info_obj, "type", TYPE);
-        if (VariantExt::has_indexing(TYPE))
-        {
-            set_field(isolate, context, class_info_obj, "element_type", VariantExt::get_indexed_element_type(TYPE));
+        
+        if (builtin_class->has_indexing_return_type) {
+            set_field(isolate, context, class_info_obj, "element_type", builtin_class->indexing_type);
         }
-        set_field(isolate, context, class_info_obj, "is_keyed", VariantExt::is_keyed(TYPE));
+        set_field(isolate, context, class_info_obj, "is_keyed", builtin_class->is_keyed);
 
-        // methods
+        // methods (static/utility variants, with implicit `target` param for non-static methods)
         {
             JSB_HANDLE_SCOPE(isolate);
 
-            List<StringName> methods;
-            VariantExt::get_builtin_method_list(TYPE, &methods);
-            v8::Local<v8::Array> methods_obj = v8::Array::New(isolate, (int) methods.size());
+            v8::Local<v8::Array> methods_obj = v8::Array::New(isolate);
             set_field(isolate, context, class_info_obj, "methods", methods_obj);
             int index = 0;
-            for (const StringName& name : methods)
+            for (const auto& api_method : builtin_class->methods)
             {
                 JSB_HANDLE_SCOPE(isolate);
-                MethodInfo method_info;
-                method_info.name = name;
-                method_info.flags = METHOD_FLAG_STATIC;
-                if (VariantExt::is_builtin_method_vararg(TYPE, name)) method_info.flags |= METHOD_FLAG_VARARG;
-                method_info.return_val.type = VariantExt::get_builtin_method_return_type(TYPE, name);
+                const godot::MethodInfo& ori_method_info = api_method.method;
 
-                if (!VariantExt::is_builtin_method_static(TYPE, name))
+                godot::MethodInfo method_info;
+                
+                method_info.name = ori_method_info.name;
+                method_info.flags = METHOD_FLAG_STATIC | ori_method_info.flags; // 强制为 Static 附加 VARARG 与 CONST
+
+                method_info.return_val.type = ori_method_info.return_val.type;
+                method_info.return_val.usage = ori_method_info.return_val.usage;
+
+                if (ori_method_info.flags & METHOD_FLAG_STATIC)
                 {
                     PropertyInfo prop_info;
                     prop_info.name = "target";
@@ -786,19 +642,17 @@ namespace jsb
                     method_info.arguments.push_back(prop_info);
                 }
 
-                for (int i = 0, n = VariantExt::get_builtin_method_argument_count(TYPE, name); i < n; ++i)
+                for (const godot::PropertyInfo &arg :ori_method_info.arguments)
                 {
                     PropertyInfo prop_info;
-                    prop_info.name = VariantExt::get_builtin_method_argument_name(TYPE, name, i);
-                    prop_info.type = VariantExt::get_builtin_method_argument_type(TYPE, name, i);
+                    prop_info.name = arg.name;
+                    prop_info.type = arg.type;
                     method_info.arguments.push_back(prop_info);
                 }
-                method_info.default_arguments = VariantExt::get_builtin_method_default_arguments(TYPE, name);
-                if (VariantExt::is_builtin_method_const(TYPE, name)) method_info.flags |= METHOD_FLAG_CONST;
-                if (VariantExt::is_builtin_method_vararg(TYPE, name)) method_info.flags |= METHOD_FLAG_VARARG;
-                const bool has_return_value = VariantExt::has_builtin_method_return_value(TYPE, name);
+                method_info.default_arguments = ori_method_info.default_arguments;
+
                 v8::Local<v8::Object> method_info_obj = v8::Object::New(isolate);
-                build_method_info(isolate, context, method_info, has_return_value, method_info_obj);
+                build_method_info(isolate, context, method_info, method_info_obj);
                 methods_obj->Set(context, index++, method_info_obj).Check();
             }
         }
@@ -807,25 +661,14 @@ namespace jsb
         {
             JSB_HANDLE_SCOPE(isolate);
 
-            List<StringName> enums;
-            VariantExt::get_enums_for_type(TYPE, &enums);
-            v8::Local<v8::Array> enums_obj = v8::Array::New(isolate, (int) enums.size());
+            v8::Local<v8::Array> enums_obj = v8::Array::New(isolate, (int) builtin_class->enums.size());
             set_field(isolate, context, class_info_obj, "enums", enums_obj);
             int index = 0;
-            for (const StringName& enum_name : enums)
+            for (const auto& api_enum : builtin_class->enums)
             {
                 JSB_HANDLE_SCOPE(isolate);
-                List<StringName> enumerations;
-                VariantExt::get_enumerations_for_enum(TYPE, enum_name, &enumerations);
-                FEnumInfo enum_info;
-                for (const StringName& enumeration : enumerations)
-                {
-                    const int enum_value = VariantExt::get_enum_value(TYPE, enum_name, enumeration);
-                    enum_info.values.insert(enumeration, enum_value);
-                }
                 v8::Local<v8::Object> enum_info_obj = v8::Object::New(isolate);
-                set_field(isolate, context, enum_info_obj, "name", enum_name);
-                build_enum_info(isolate, context, enum_name, enum_info, enum_info_obj);
+                build_enum_info(isolate, context, api_enum, enum_info_obj);
                 enums_obj->Set(context, index++, enum_info_obj).Check();
             }
         }
@@ -834,26 +677,14 @@ namespace jsb
         {
             JSB_HANDLE_SCOPE(isolate);
 
-            List<StringName> constants;
-            VariantExt::get_constants_for_type(TYPE, &constants);
-            v8::Local<v8::Array> constants_obj = v8::Array::New(isolate, (int) constants.size());
+            v8::Local<v8::Array> constants_obj = v8::Array::New(isolate, (int) builtin_class->constants.size());
             set_field(isolate, context, class_info_obj, "constants", constants_obj);
             int index = 0;
-            for (const StringName& constant : constants)
+            for (const auto& api_builtin_class_constant : builtin_class->constants)
             {
                 JSB_HANDLE_SCOPE(isolate);
                 v8::Local<v8::Object> constant_info_obj = v8::Object::New(isolate);
-                const Variant constant_value = VariantExt::get_constant_value(TYPE, constant);
-
-                set_field(isolate, context, constant_info_obj, "name", constant);
-                set_field(isolate, context, constant_info_obj, "type", constant_value.get_type());
-                switch (constant_value.get_type())
-                {
-                case Variant::BOOL: set_field(isolate, context, constant_info_obj, "value", (bool) constant_value); break;
-                case Variant::INT: set_field(isolate, context, constant_info_obj, "value", (int64_t) constant_value); break;
-                case Variant::FLOAT: set_field(isolate, context, constant_info_obj, "value", (double) constant_value); break;
-                default: break;
-                }
+                build_builtin_class_constant(isolate, context, api_builtin_class_constant, constant_info_obj);
                 constants_obj->Set(context, index++, constant_info_obj).Check();
             }
         }
@@ -869,83 +700,90 @@ namespace jsb
 
         const String name = impl::Helper::to_string(isolate, info[0]);
 
-		if (DocTools *doc_tools = EditorHelp::get_doc_data()) {
-			if (const DocData::ClassDoc *ptr = doc_tools->class_list.getptr(name)){
-        		const DocData::ClassDoc& class_doc = *ptr;
-        		v8::Local<v8::Object> class_doc_obj = v8::Object::New(isolate);
+        JSB_HANDLE_SCOPE(isolate);
+        if (auto doc = api_tool::find_document(name)) {
+            v8::Local<v8::Object> class_doc_obj = v8::Object::New(isolate);
+            // set_field(isolate, context, class_doc_obj, "name", doc->name);
+            // set_field(isolate, context, class_doc_obj, "description", doc->description);
+set_field(isolate, context, class_doc_obj, "brief_description", doc->brief_description);
 
-        		// doc:class<brief>
-        		set_field(isolate, context, class_doc_obj, JSB_GET_FIELD_NAME_PRESET(class_doc, brief_description));
+            {
+                // doc:constants
+                JSB_HANDLE_SCOPE(isolate);
 
-        		// doc:constants
-        		{
-        			JSB_HANDLE_SCOPE(isolate);
+                v8::Local<v8::Object> constants_obj = v8::Object::New(isolate);
+                set_field(isolate, context, class_doc_obj, "constants", constants_obj);
+                for (const auto& constant_doc : doc->constants)
+                {
+                    JSB_HANDLE_SCOPE(isolate);
+                    v8::Local<v8::Object> constant_obj = v8::Object::New(isolate);
+                    const String constant_name = internal::NamingUtil::get_constant_name(constant_doc.name);
+                    constants_obj->Set(context, impl::Helper::new_string(isolate, constant_name), constant_obj).Check();
 
-        			v8::Local<v8::Object> constants_obj = v8::Object::New(isolate);
-        			set_field(isolate, context, class_doc_obj, "constants", constants_obj);
-        			for (const DocData::ConstantDoc& constant_doc : class_doc.constants)
-        			{
-        				JSB_HANDLE_SCOPE(isolate);
-        				v8::Local<v8::Object> constant_obj = v8::Object::New(isolate);
-        				String constant_name = internal::NamingUtil::get_constant_name(constant_doc.name);
-        				constants_obj->Set(context, impl::Helper::new_string(isolate, constant_name), constant_obj).Check();
+                    set_field(isolate, context, constant_obj, "description", constant_doc.description);
+                }
 
-        				set_field(isolate, context, constant_obj, "description", constant_doc.description);
-        			}
-        		}
+                // doc:enums。内置类遵循 godot 的文档格式，整合进 constants 中
+                for (const auto& enum_doc : doc->enums) {
+                    for (const auto& enum_value_doc : enum_doc.values) {
+                        JSB_HANDLE_SCOPE(isolate);
+                        v8::Local<v8::Object> constant_obj = v8::Object::New(isolate);
 
-        		// doc:methods
-        		{
-        			JSB_HANDLE_SCOPE(isolate);
+                        const String constant_name = internal::NamingUtil::get_constant_name(enum_value_doc.name);
+                        v8::Local<v8::Name> js_constant_name = impl::Helper::new_string(isolate, constant_name);
+                        jsb_check(constants_obj->HasOwnProperty(context, js_constant_name).ToChecked());
 
-        			v8::Local<v8::Object> methods_obj = v8::Object::New(isolate);
-        			set_field(isolate, context, class_doc_obj, "methods", methods_obj);
-        			for (const DocData::MethodDoc& method_doc : class_doc.methods)
-        			{
-        				JSB_HANDLE_SCOPE(isolate);
-        				v8::Local<v8::Object> method_obj = v8::Object::New(isolate);
-        				String method_name = internal::NamingUtil::get_member_name(method_doc.name);
-        				methods_obj->Set(context, impl::Helper::new_string(isolate, method_name), method_obj).Check();
+                        constants_obj->Set(context, js_constant_name, constant_obj).Check();
+                        set_field(isolate, context, constant_obj, "description", enum_value_doc.description);
+                    }
+                }
+            }
+            // doc:methods
+            {
+                JSB_HANDLE_SCOPE(isolate);
+                v8::Local<v8::Object> methods_obj = v8::Object::New(isolate);
+                set_field(isolate, context, class_doc_obj, "methods", methods_obj);
+                for (const auto& method_doc : doc->methods) {
+                    JSB_HANDLE_SCOPE(isolate);
+                    v8::Local<v8::Object> method_obj = v8::Object::New(isolate);
+                    const String method_name = internal::NamingUtil::get_member_name(method_doc.name);
+                    methods_obj->Set(context, impl::Helper::new_string(isolate, method_name), method_obj).Check();
+                    // set_field(isolate, context, method_obj, "name", method_doc.name);
+                    set_field(isolate, context, method_obj, "description", method_doc.description);
+                }
+            }
 
-        				set_field(isolate, context, method_obj, "description", method_doc.description);
-        			}
-        		}
+            // doc:properties
+            {
+                JSB_HANDLE_SCOPE(isolate);
+                v8::Local<v8::Object> properties_obj = v8::Object::New(isolate);
+                set_field(isolate, context, class_doc_obj, "properties", properties_obj);
+                for (const auto& property_doc : doc->properties) {
+                    JSB_HANDLE_SCOPE(isolate);
+                    v8::Local<v8::Object> property_obj = v8::Object::New(isolate);
+                    const String property_name = internal::NamingUtil::get_member_name(property_doc.name);
+                    properties_obj->Set(context, impl::Helper::new_string(isolate, property_name), property_obj).Check();
+                    // set_field(isolate, context, property_obj, "name", internal::NamingUtil::get_member_name(property_doc.name));
+                    set_field(isolate, context, property_obj, "description", property_doc.description);
+                }
+            }
 
-        		// doc:properties
-        		{
-        			JSB_HANDLE_SCOPE(isolate);
-        			v8::Local<v8::Object> properties_obj = v8::Object::New(isolate);
-        			set_field(isolate, context, class_doc_obj, "properties", properties_obj);
-        			for (const DocData::PropertyDoc& property_doc : class_doc.properties)
-        			{
-        				JSB_HANDLE_SCOPE(isolate);
-        				v8::Local<v8::Object> property_obj = v8::Object::New(isolate);
-        				String property_name = internal::NamingUtil::get_member_name(property_doc.name);
-        				properties_obj->Set(context, impl::Helper::new_string(isolate, property_name), property_obj).Check();
+            // doc:signals
+            {
+                JSB_HANDLE_SCOPE(isolate);
+                v8::Local<v8::Object> signals_obj = v8::Object::New(isolate);
+                set_field(isolate, context, class_doc_obj, "signals", signals_obj);
+                for (const auto& signal_doc : doc->signals) {
+                    JSB_HANDLE_SCOPE(isolate);
+                    v8::Local<v8::Object> signal_obj = v8::Object::New(isolate);
+                    const String signal_name = internal::NamingUtil::get_member_name(signal_doc.name);
+                    set_field(isolate, context, signal_obj, "name", signal_doc.name);
+                    // set_field(isolate, context, signal_obj, "description", signal_doc.description);
+                    signals_obj->Set(context, impl::Helper::new_string(isolate, signal_name), signal_obj).Check();
+                }
+            }
 
-        				set_field(isolate, context, property_obj, "description", property_doc.description);
-        			}
-        		}
-
-        		// doc:signals
-        		{
-        			JSB_HANDLE_SCOPE(isolate);
-
-        			v8::Local<v8::Object> signals_obj = v8::Object::New(isolate);
-        			set_field(isolate, context, class_doc_obj, "signals", signals_obj);
-        			for (const DocData::MethodDoc& signal_doc : class_doc.signals)
-        			{
-        				JSB_HANDLE_SCOPE(isolate);
-        				v8::Local<v8::Object> signal_obj = v8::Object::New(isolate);
-        				String signal_name = internal::NamingUtil::get_member_name(signal_doc.name);
-        				signals_obj->Set(context, impl::Helper::new_string(isolate, signal_name), signal_obj).Check();
-
-        				set_field(isolate, context, signal_obj, "description", signal_doc.description);
-        			}
-        		}
-
-        		info.GetReturnValue().Set(class_doc_obj);
-        	}
+            info.GetReturnValue().Set(class_doc_obj);
         }
     }
 
@@ -994,47 +832,44 @@ namespace jsb
         v8::HandleScope handle_scope(isolate);
         v8::Local<v8::Context> context = isolate->GetCurrentContext();
 
-        const int num = CoreConstants::get_global_constant_count();
-        HashSet<StringName> enum_packs;
-        v8::Local<v8::Array> array = v8::Array::New(isolate, num);
-        int array_index = 0;
-        for (int index = 0; index < num; ++index)
-        {
-            const StringName enum_name = CoreConstants::get_global_constant_enum(index);
-            if (enum_name.is_empty() || !CoreConstants::is_global_enum(enum_name))
-            {
-                JSB_HANDLE_SCOPE(isolate);
-                v8::Local<v8::Object> constant_obj = v8::Object::New(isolate);
-                const StringName constant_name = CoreConstants::get_global_constant_name(index);
-                const int64_t constant_value = CoreConstants::get_global_constant_value(index);
-                set_field(isolate, context, constant_obj, "name", internal::NamingUtil::get_enum_value_name(constant_name));
-                set_field(isolate, context, constant_obj, "value", constant_value);
-                array->Set(context, array_index++, constant_obj).Check();
-                continue;
-            }
-            if (enum_packs.has(enum_name) || enum_name.is_empty())
-            {
-                continue;
-            }
+        // Get list of global constant names from api_tool
+        const auto constant_names = api_tool::list_global_constants();
+        const auto enum_names = api_tool::list_global_enums();
 
+        // Estimate array size: constants + enums
+        v8::Local<v8::Array> array = v8::Array::New(isolate, constant_names.size() + enum_names.size());
+        int array_index = 0;
+
+        // First, add individual constants (those not part of an enum)
+        for (const StringName& constant_name : constant_names) {
+            const auto api_global_constant = api_tool::find_global_constant(constant_name);
+            jsb_check(api_global_constant);
             JSB_HANDLE_SCOPE(isolate);
-            enum_packs.insert(enum_name);
+            v8::Local<v8::Object> constant_obj = v8::Object::New(isolate);
+            set_field(isolate, context, constant_obj, "name", internal::NamingUtil::get_enum_value_name(constant_name));
+            set_field(isolate, context, constant_obj, "value", api_global_constant->value);
+            array->Set(context, array_index++, constant_obj).Check();
+        }
+
+        // Then, add enums with their values
+        for (const StringName& enum_name : enum_names) {
+            const auto* enum_info = api_tool::find_global_enum(enum_name);
+            jsb_check(enum_info);
+            JSB_HANDLE_SCOPE(isolate);
             v8::Local<v8::Object> enum_obj = v8::Object::New(isolate);
             v8::Local<v8::Object> values_obj = v8::Object::New(isolate);
-            HashMap<StringName, int64_t> map;
             const StringName exposed_enum_name = internal::NamingUtil::get_enum_name(enum_name);
             set_field(isolate, context, enum_obj, "name", exposed_enum_name);
             set_field(isolate, context, enum_obj, "values", values_obj);
-            CoreConstants::get_enum_values(enum_name, &map);
-            for (const KeyValue<StringName, int64_t>& kv : map)
-            {
+            for (const auto& api_enum : enum_info->values) {
                 JSB_HANDLE_SCOPE(isolate);
                 values_obj->Set(context,
-                    impl::Helper::new_string(isolate, internal::NamingUtil::get_enum_value_name(kv.key)),
-                    impl::Helper::new_integer(isolate, kv.value)).Check();
+                    impl::Helper::new_string(isolate, internal::NamingUtil::get_enum_value_name(api_enum.name)),
+                    impl::Helper::new_integer(isolate, api_enum.value)).Check();
             }
             array->Set(context, array_index++, enum_obj).Check();
         }
+
         info.GetReturnValue().Set(array);
     }
 
@@ -1093,18 +928,18 @@ namespace jsb
         v8::HandleScope handle_scope(isolate);
         v8::Local<v8::Context> context = isolate->GetCurrentContext();
 
-        List<StringName> utility_function_list;
-        VariantExt::get_utility_function_list(&utility_function_list);
-        v8::Local<v8::Array> array = v8::Array::New(isolate, utility_function_list.size());
+        const auto utility_function_names = api_tool::list_utility_functions();
+        v8::Local<v8::Array> array = v8::Array::New(isolate, utility_function_names.size());
         int index = 0;
-        for (auto it = utility_function_list.begin(); it != utility_function_list.end(); ++it, ++index)
+        for (const StringName& name : utility_function_names)
         {
-            JSB_HANDLE_SCOPE(isolate);
-            const MethodInfo method_info = VariantExt::get_utility_function_info(*it);
-            const bool has_return_value = VariantExt::has_utility_function_return_value(*it);
-            v8::Local<v8::Object> method_info_obj = v8::Object::New(isolate);
-            build_method_info(isolate, context, method_info, has_return_value, method_info_obj);
-            array->Set(context, index, method_info_obj).Check();
+            if (auto utility_func = api_tool::find_utility_function(name)) {
+                JSB_HANDLE_SCOPE(isolate);
+                const MethodInfo& method_info = utility_func->method;
+                v8::Local<v8::Object> method_info_obj = v8::Object::New(isolate);
+                build_method_info(isolate, context, method_info, method_info_obj);
+                array->Set(context, index++, method_info_obj).Check();
+            }
         }
         info.GetReturnValue().Set(array);
     }

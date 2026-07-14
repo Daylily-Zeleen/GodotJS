@@ -162,6 +162,12 @@ static void serialize_constant_info(PayloadWriter &w, const ApiConstantInfo &v) 
     w.write_bool(v.is_bitfield);
 }
 
+static void serialize_builtin_class_constant_info(PayloadWriter &w, const ApiBuiltInClassConstantInfo &v) {
+    w.write_string_name(v.name);
+    w.write_u32(static_cast<uint32_t>(v.type));
+    w.write_variant(v.value);
+}
+
 static void serialize_api_method_info(PayloadWriter &w, const ApiMethodInfo &ami) {
     serialize_method_info_payload(w, ami.method);
     w.write_i64(ami.hash);
@@ -226,7 +232,7 @@ godot::Error ApiStoreWriter::write_builtin_class(const godot::String &p_path, co
     // constants
     w.write_i32(static_cast<int32_t>(p_data.constants.size()));
     for (int i = 0; i < p_data.constants.size(); i++) {
-        serialize_constant_info(w, p_data.constants[i]);
+        serialize_builtin_class_constant_info(w, p_data.constants[i]);
     }
     // enums
     w.write_i32(static_cast<int32_t>(p_data.enums.size()));
@@ -241,7 +247,7 @@ godot::Error ApiStoreWriter::write_builtin_class(const godot::String &p_path, co
     // operators
     w.write_i32(static_cast<int32_t>(p_data.operators.size()));
     for (int i = 0; i < p_data.operators.size(); i++) {
-        w.write_string_name(p_data.operators[i].name);
+        w.write_u32(static_cast<uint32_t>(p_data.operators[i].op));
         w.write_u32(static_cast<uint32_t>(p_data.operators[i].return_type));
         w.write_u32(static_cast<uint32_t>(p_data.operators[i].left_type));
         w.write_u32(static_cast<uint32_t>(p_data.operators[i].right_type));
@@ -288,6 +294,7 @@ godot::Error ApiStoreWriter::write_class(const godot::String &p_path, const ApiC
         serialize_property_info(w, p_data.properties[i].property);
         w.write_string_name(p_data.properties[i].setter);
         w.write_string_name(p_data.properties[i].getter);
+        w.write_i32(p_data.properties[i].index);
     }
     // enums
     w.write_i32(static_cast<int32_t>(p_data.enums.size()));
@@ -408,51 +415,42 @@ static void serialize_constructor_document(PayloadWriter &w, const ApiConstructo
     w.write_string(d.description);
 }
 
-godot::Error ApiStoreWriter::write_class_document(const godot::String &p_path, const ApiClassDocument &p_data) {
+godot::Error ApiStoreWriter::write_document(const godot::String &p_path, const ApiClassDocument &p_data) {
     PayloadWriter w;
     w.write_string(p_data.name);
     w.write_string(p_data.brief_description);
     w.write_string(p_data.description);
+    // methods
     w.write_i32(static_cast<int32_t>(p_data.methods.size()));
     for (int i = 0; i < p_data.methods.size(); i++) {
         serialize_method_document(w, p_data.methods[i]);
     }
+    // signals (Class only, BuiltInClass has none)
     w.write_i32(static_cast<int32_t>(p_data.signals.size()));
     for (int i = 0; i < p_data.signals.size(); i++) {
         serialize_signal_document(w, p_data.signals[i]);
     }
+    // properties (both Class and BuiltInClass)
     w.write_i32(static_cast<int32_t>(p_data.properties.size()));
     for (int i = 0; i < p_data.properties.size(); i++) {
         serialize_property_document(w, p_data.properties[i]);
     }
+    // enums
     w.write_i32(static_cast<int32_t>(p_data.enums.size()));
     for (int i = 0; i < p_data.enums.size(); i++) {
         serialize_enum_document(w, p_data.enums[i]);
     }
-    return write_payload_to_file(p_path, w.get_buffer());
-}
-
-godot::Error ApiStoreWriter::write_builtin_class_document(const godot::String &p_path, const ApiBuiltinClassDocument &p_data) {
-    PayloadWriter w;
-    w.write_string(p_data.name);
-    w.write_string(p_data.brief_description);
-    w.write_string(p_data.description);
-    w.write_i32(static_cast<int32_t>(p_data.methods.size()));
-    for (int i = 0; i < p_data.methods.size(); i++) {
-        serialize_method_document(w, p_data.methods[i]);
-    }
-    w.write_i32(static_cast<int32_t>(p_data.members.size()));
-    for (int i = 0; i < p_data.members.size(); i++) {
-        serialize_member_document(w, p_data.members[i]);
-    }
+    // BuiltInClass-only: constants
     w.write_i32(static_cast<int32_t>(p_data.constants.size()));
     for (int i = 0; i < p_data.constants.size(); i++) {
         serialize_constant_document(w, p_data.constants[i]);
     }
+    // BuiltInClass-only: operators
     w.write_i32(static_cast<int32_t>(p_data.operators.size()));
     for (int i = 0; i < p_data.operators.size(); i++) {
         serialize_operator_document(w, p_data.operators[i]);
     }
+    // BuiltInClass-only: constructors
     w.write_i32(static_cast<int32_t>(p_data.constructors.size()));
     for (int i = 0; i < p_data.constructors.size(); i++) {
         serialize_constructor_document(w, p_data.constructors[i]);

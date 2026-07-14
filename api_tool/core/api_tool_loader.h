@@ -49,8 +49,7 @@ public:
 #ifdef TOOLS_ENABLED
     // ---- Document queries (no cache, direct file read, TOOLS_ENABLED only) ----
     // Returns std::unique_ptr<T> (caller owns). Returns nullptr if file missing/corrupted.
-    std::unique_ptr<ApiClassDocument> find_class_document(const godot::StringName &p_name);
-    std::unique_ptr<ApiBuiltinClassDocument> find_builtin_class_document(const godot::StringName &p_name);
+std::unique_ptr<ApiClassDocument> find_document(const godot::StringName &p_name);
     std::unique_ptr<ApiUtilityFunctionDocument> find_utility_function_document(const godot::StringName &p_name);
     std::unique_ptr<ApiGlobalEnumDocument> find_global_enum_document(const godot::StringName &p_name);
     std::unique_ptr<ApiGlobalConstantDocument> find_global_constant_document(const godot::StringName &p_name);

@@ -58,44 +58,6 @@
         }\
     };
 
-static const String &get_variant_operator_name(Variant::Operator p_op) {
-#define __VAR_OP_TO_TEXT(op) { Variant::Operator::op, (#op) }
-    static const HashMap<Variant::Operator, String> search = {
-		// comparison
-		__VAR_OP_TO_TEXT(OP_EQUAL),
-		__VAR_OP_TO_TEXT(OP_NOT_EQUAL),
-		__VAR_OP_TO_TEXT(OP_LESS),
-		__VAR_OP_TO_TEXT(OP_LESS_EQUAL),
-		__VAR_OP_TO_TEXT(OP_GREATER),
-		__VAR_OP_TO_TEXT(OP_GREATER_EQUAL),
-		// mathematic
-		__VAR_OP_TO_TEXT(OP_ADD),
-		__VAR_OP_TO_TEXT(OP_SUBTRACT),
-		__VAR_OP_TO_TEXT(OP_MULTIPLY),
-		__VAR_OP_TO_TEXT(OP_DIVIDE),
-		__VAR_OP_TO_TEXT(OP_NEGATE),
-		__VAR_OP_TO_TEXT(OP_POSITIVE),
-		__VAR_OP_TO_TEXT(OP_MODULE),
-		__VAR_OP_TO_TEXT(OP_POWER),
-		// bitwise
-		__VAR_OP_TO_TEXT(OP_SHIFT_LEFT),
-		__VAR_OP_TO_TEXT(OP_SHIFT_RIGHT),
-		__VAR_OP_TO_TEXT(OP_BIT_AND),
-		__VAR_OP_TO_TEXT(OP_BIT_OR),
-		__VAR_OP_TO_TEXT(OP_BIT_XOR),
-		__VAR_OP_TO_TEXT(OP_BIT_NEGATE),
-		// logic
-		__VAR_OP_TO_TEXT(OP_AND),
-		__VAR_OP_TO_TEXT(OP_OR),
-		__VAR_OP_TO_TEXT(OP_XOR),
-		__VAR_OP_TO_TEXT(OP_NOT),
-		// containment
-		__VAR_OP_TO_TEXT(OP_IN),
-		__VAR_OP_TO_TEXT(OP_MAX),
-    };
-    return search[p_op];
-}
-
 namespace jsb
 {
     struct BinaryOperator
@@ -123,7 +85,7 @@ namespace jsb
             {
                 jsb_throw(isolate, jsb_format(
                     "bad operation(%s) between %s and %s.", 
-                    get_variant_operator_name(op),
+                    jsb::internal::VariantUtil::get_variant_operator_name(op),
                     Variant::get_type_name(left.get_type()),
                     Variant::get_type_name(right.get_type())));
                 return;
@@ -163,7 +125,10 @@ namespace jsb
             Variant::evaluate(op, left, right, ret, r_valid);
             if (!r_valid)
             {
-                jsb_throw(isolate, jsb_format("bad operation(%s) on %s.", get_variant_operator_name(op), Variant::get_type_name(left.get_type())));
+                jsb_throw(isolate, jsb_format(
+                    "bad operation(%s) on %s.",
+                    jsb::internal::VariantUtil::get_variant_operator_name(op),
+                    Variant::get_type_name(left.get_type())));
                 return;
             }
 

@@ -15,6 +15,18 @@
 #include <godot_cpp/classes/global_constants.hpp>
 #include <godot_cpp/templates/local_vector.hpp>
 
+namespace godot {
+class Variant;
+// ============================================================================
+// ValidatedPtr
+// ============================================================================
+using ValidatedUtilityFunction = void (*)(Variant *r_ret, const Variant **p_args, int p_argcount);
+using ValidatedConstructor = void (*)(Variant *r_base, const Variant **p_args);
+using ValidatedSetter = void (*)(Variant *base, const Variant *value);
+using ValidatedGetter = void (*)(const Variant *base, Variant *value);
+using ValidatedBuiltInMethod = void (*)(Variant *base, const Variant **p_args, int p_argcount, Variant *r_ret);
+};
+
 namespace api_tool {
 
 // ============================================================================
@@ -22,7 +34,7 @@ namespace api_tool {
 // ============================================================================
 
 constexpr uint32_t STORE_MAGIC = 0x41504946; // "APIF"
-constexpr uint32_t STORE_VERSION = 3; // v3: PropertyInfo/MethodInfo reuse
+constexpr uint32_t STORE_VERSION = 5; // v5: unified ApiClassDocument for Class and BuiltInClass
 
 // ============================================================================
 // Directory/file name constants
@@ -158,6 +170,14 @@ struct ApiMethodInfo {
     godot::LocalVector<int64_t> hash_compatibility;
 };
 
+struct ApiMethodInfoBuiltIn : public ApiMethodInfo {
+    godot::ValidatedBuiltInMethod func; // TODO: 通过 gdextension_interface.h 的 C 接口加载
+};
+
+struct ApiMethodInfoBind: public ApiMethodInfo {
+    GDExtensionMethodBindPtr method_bind; // TODO: 通过 gdextension_interface.h 的 C 接口加载
+};
+
 // ============================================================================
 // PropertyInfo wrapper (reuses godot::PropertyInfo + setter/getter + doc)
 // ============================================================================
@@ -166,6 +186,10 @@ struct ApiPropertyInfo {
     godot::PropertyInfo property; // Reuse godot-cpp: type, name, class_name, hint, hint_string, usage
     godot::StringName setter;
     godot::StringName getter;
+    int32_t index = -1; // Property index (for builtin classes with members)
+
+    godot::ValidatedSetter setter_func; // TODO: 通过 gdextension_interface.h 的 C 接口加载。注意只有 index < 0 才有访问器函数
+    godot::ValidatedGetter getter_func; // TODO: 通过 gdextension_interface.h 的 C 接口加载。注意只有 index < 0 才有访问器函数
 };
 
 // ============================================================================
@@ -198,12 +222,16 @@ struct ApiConstantInfo {
     bool is_bitfield = false;
 };
 
-// ============================================================================
-// Operator / Constructor / Member
+struct ApiBuiltInClassConstantInfo {
+    godot::StringName name;
+    godot::Variant::Type type;
+    godot::Variant value;
+};
+
 // ============================================================================
 
 struct ApiOperatorInfo {
-    godot::StringName name;
+    godot::Variant::Operator op = godot::Variant::OP_EQUAL;
     godot::Variant::Type return_type = godot::Variant::NIL;
     godot::Variant::Type left_type = godot::Variant::NIL;
     godot::Variant::Type right_type = godot::Variant::NIL;
@@ -226,6 +254,8 @@ struct ApiUtilityFunction {
     godot::MethodInfo method; // Reuse MethodInfo (name, return_val, flags, args, etc.)
     int64_t hash = 0;
     godot::StringName category;
+
+    godot::ValidatedUtilityFunction func; // TODO: 通过 gdextension_interface.h 的 C 接口加载
 };
 
 // ============================================================================
@@ -240,9 +270,9 @@ struct ApiBuiltinClass {
     bool is_keyed = false;
     bool has_destructor = false;
     godot::LocalVector<ApiMemberInfo> members;
-    godot::LocalVector<ApiConstantInfo> constants;
+    godot::LocalVector<ApiBuiltInClassConstantInfo> constants;
     godot::LocalVector<ApiEnumInfo> enums;
-    godot::LocalVector<ApiMethodInfo> methods;
+    godot::LocalVector<ApiMethodInfoBuiltIn> methods; // TODO: 修改为 godot::LocalVector<ApiMethodInfoBuiltIn>, 相应调整其他逻辑
     godot::LocalVector<ApiOperatorInfo> operators;
     godot::LocalVector<ApiConstructorInfo> constructors;
 };
@@ -257,7 +287,7 @@ struct ApiClass {
     godot::StringName api_type;
     bool is_refcounted = false;
     bool is_instantiable = true;
-    godot::LocalVector<ApiMethodInfo> methods;
+    godot::LocalVector<ApiMethodInfoBind> methods; // TODO: 修改为 godot::LocalVector<ApiMethodInfoBind>, 相应调整其他逻辑
     godot::LocalVector<ApiSignalInfo> signals;
     godot::LocalVector<ApiPropertyInfo> properties;
     godot::LocalVector<ApiEnumInfo> enums;
@@ -329,6 +359,8 @@ struct ApiOperatorDocument {
 struct ApiConstructorDocument {
     int32_t index = 0;
     godot::String description;
+
+    godot::ValidatedConstructor func; // TODO: 通过 gdextension_interface.h 的 C 接口加载
 };
 
 // ============================================================================
@@ -343,17 +375,7 @@ struct ApiClassDocument {
     godot::LocalVector<ApiSignalDocument> signals;
     godot::LocalVector<ApiPropertyDocument> properties;
     godot::LocalVector<ApiEnumDocument> enums;
-};
-
-struct ApiBuiltinClassDocument {
-    godot::String name;
-    godot::String brief_description;
-    godot::String description;
-    godot::LocalVector<ApiMethodDocument> methods;
-    godot::LocalVector<ApiSignalDocument> signals;
-    godot::LocalVector<ApiPropertyDocument> properties;
-    godot::LocalVector<ApiEnumDocument> enums;
-    godot::LocalVector<ApiMemberDocument> members;
+    // BuiltInClass-specific fields (empty for regular classes)
     godot::LocalVector<ApiConstantDocument> constants;
     godot::LocalVector<ApiOperatorDocument> operators;
     godot::LocalVector<ApiConstructorDocument> constructors;
