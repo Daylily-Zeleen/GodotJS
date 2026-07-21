@@ -47,7 +47,7 @@ Variant ResourceFormatLoaderGodotJSScript::_load(const String& p_path, const Str
 
     // {
     //     //TODO a dirty but approaching solution for hot-reloading
-    //     std::lock_guard<std::mutex> lock(GodotJSScriptLanguage::singleton_->mutex_);
+    //     std::lock_guard lock(GodotJSScriptLanguage::singleton_->mutex_);
     //     SelfList<GodotJSScript> *elem = GodotJSScriptLanguage::singleton_->script_list_.first();
     //     while (elem)
     //     {

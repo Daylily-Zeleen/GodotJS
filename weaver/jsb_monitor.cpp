@@ -7,9 +7,6 @@
     monitor_names_.push_back(JSB_MODULE_NAME_STRING "/" # MonitorName);\
     jsb::compat::Performance::get_singleton()->add_custom_monitor(monitor_names_[monitor_names_.size() - 1], callable_mp(this, &GodotJSMonitor::get_value_## MonitorName), {})
 
-#define JSB_BIND_MONITOR(MonitorName) \
-    ClassDB::bind_method(D_METHOD("get_value_" #MonitorName), &GodotJSMonitor::get_value_ ## MonitorName)
-
 #define JSB_DEFINE_MONITOR(MonitorName) \
     Variant GodotJSMonitor::get_value_ ## MonitorName()\
     {\
@@ -36,21 +33,6 @@ GodotJSMonitor::GodotJSMonitor()
     JSB_NEW_MONITOR(heap_size);
 #elif JSB_WITH_QUICKJS
     JSB_NEW_MONITOR(memory_used_size);
-#endif
-}
-
-void GodotJSMonitor::_bind_methods()
-{
-    JSB_BIND_MONITOR(objects);
-    JSB_BIND_MONITOR(native_classes);
-    JSB_BIND_MONITOR(script_classes);
-    JSB_BIND_MONITOR(cached_string_names);
-    JSB_BIND_MONITOR(persistent_objects);
-    JSB_BIND_MONITOR(allocated_variants);
-#if JSB_WITH_V8
-    JSB_BIND_MONITOR(heap_size);
-#elif JSB_WITH_QUICKJS
-    JSB_BIND_MONITOR(memory_used_size);
 #endif
 }
 

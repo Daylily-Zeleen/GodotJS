@@ -10,7 +10,7 @@
 #include <godot_cpp/variant/string.hpp>
 #include <godot_cpp/variant/packed_byte_array.hpp>
 
-namespace api_tool {
+namespace api_tool::internal {
 
 class ApiStoreReader {
 public:

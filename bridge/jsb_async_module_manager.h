@@ -20,7 +20,7 @@ namespace jsb
 #endif
         };
 
-        mutable std::mutex modules_mutex_;
+        mutable std::recursive_mutex modules_mutex_;
 
         /**
          * > THIS IS NOT IMPLEMENTED YET:

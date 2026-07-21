@@ -1,27 +1,13 @@
 #ifndef GODOTJS_COMPAT_H
 #define GODOTJS_COMPAT_H
 
+#include "godot_cpp/core/method_ptrcall.hpp"
 #include "jsb_engine_version_comparison.h"
 #include "jsb_paged_allocator.h"
 #include "jsb_ring_buffer.h"
 #include "jsb_rw_lock.h"
 
-// GDExtension compatibility: Variant::PTRBuiltInMethod was removed in godot-cpp 4.7
-// Define them here for backward compatibility (matches Godot 4.2 engine signatures)
 namespace godot {
-using PTRBuiltInMethod = GDExtensionPtrBuiltInMethod; // void (*)(void* base, const void** args, void* r_ret, int argcount);
-using PTRGetter = GDExtensionPtrGetter; //void (*)(void* base, void* r_value);
-using PTRSetter = GDExtensionPtrSetter; //void (*)(void* base, const void* p_value);
-
-using ValidatedUtilityFunction = void (*)(Variant *r_ret, const Variant **p_args, int p_argcount);
-using ValidatedOperatorEvaluator = void (*)(const Variant *left, const Variant *right, Variant *r_ret);
-
-// GDExtension compatibility: these types are not defined in godot-cpp's Variant class
-using ValidatedBuiltInMethod = void (*)(Variant *base, const Variant **p_args, int p_argcount, Variant *r_ret);
-using ValidatedSetter = void (*)(Variant *base, const Variant *value);
-using ValidatedGetter = void (*)(const Variant *base, Variant *value);
-using ValidatedConstructor = void (*)(Variant *r_base, const Variant **p_args);
-
 using ObjectInstanceID = decltype(Object().get_instance_id());
 } //namespace godot
 
@@ -29,7 +15,9 @@ using ObjectInstanceID = decltype(Object().get_instance_id());
 #define SNAME(text) [] {static StringName sn {text}; return sn; }()
 
 static void object_get_instance_binding(Object *p_obj, void *p_token, const GDExtensionInstanceBindingCallbacks *p_callbacks) {
-	::godot::gdextension_interface::object_get_instance_binding(p_obj, p_token, p_callbacks);
+	void *obj_ptr {nullptr};
+	PtrToArg<Object*>::encode(p_obj, &obj_ptr);
+	::godot::gdextension_interface::object_get_instance_binding(obj_ptr, p_token, p_callbacks);
 }
 
 template <typename StrArray>

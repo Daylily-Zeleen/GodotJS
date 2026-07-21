@@ -180,7 +180,6 @@ namespace jsb
             set_field(isolate, context, object, "is_static", (bool)(method_info.flags & METHOD_FLAG_STATIC));
             set_field(isolate, context, object, "is_const", (bool)(method_info.flags & METHOD_FLAG_CONST));
             set_field(isolate, context, object, "is_vararg", (bool)(method_info.flags & METHOD_FLAG_VARARG));
-            // set_field(isolate, context, object, "has_return", method_bind->has_return());
             set_field(isolate, context, object, "argument_count", method_info.arguments.size());
 
             // write type info for `return`
@@ -278,11 +277,11 @@ namespace jsb
         {
             v8::Local<v8::Object> class_info_obj = v8::Object::New(isolate);
 
-            // Get class data from api_tool
-            const api_tool::ApiClass* api_class = api_tool::find_class(class_name);
-            if (!api_class) {
+            if (!api_tool::has_class(class_name)) {
                 return class_info_obj;
             }
+            const api_tool::ApiClass* api_class = api_tool::find_class(class_name);
+            jsb_check(api_class);
 
             set_field(isolate, context, class_info_obj, "name", internal::NamingUtil::get_class_name(api_class->name));
             set_field(isolate, context, class_info_obj, "internal_name", api_class->name);
@@ -328,32 +327,36 @@ namespace jsb
                 const int len = (int) api_class->methods.size();
 #endif
                 const v8::Local<v8::Array> rpc_methods_obj = v8::Array::New(isolate);
-                const v8::Local<v8::Array> virtual_methods_obj = v8::Array::New(isolate);
-                const v8::Local<v8::Array> methods_obj = v8::Array::New(isolate, len);
+                const v8::Local<v8::Array> virtual_methods_obj = v8::Array::New(isolate); // Virtual 
+                const v8::Local<v8::Array> methods_obj = v8::Array::New(isolate, len); // 非 Virtual
                 set_field(isolate, context, class_info_obj, "rpc_methods", rpc_methods_obj);
                 set_field(isolate, context, class_info_obj, "virtual_methods", virtual_methods_obj);
                 set_field(isolate, context, class_info_obj, "methods", methods_obj);
-                int virtual_methods_index = 0;
                 int rpc_methods_index = 0;
+                int virtual_methods_index = 0;
                 int methods_index = 0;
 
                 for (const auto& api_method : api_class->methods) {
                     const godot::MethodInfo& method_info = api_method.method;
                     uint32_t flags = method_info.flags;
-                    bool is_virtual = flags & (METHOD_FLAG_VIRTUAL | METHOD_FLAG_VIRTUAL_REQUIRED);
                     bool is_rpc = class_rpc_methods && ((flags & METHOD_FLAG_STATIC) == 0) && (class_rpc_methods->has(method_info.name) || class_rpc_methods->has(internal::NamingUtil::get_member_name(method_info.name)));
+                    bool is_virtual = api_method.is_virtual();
 #if JSB_EXCLUDE_GETSET_METHODS
-                    if (!is_virtual && !is_rpc && omitted_methods.has(api_method.method.name)) continue;
+                    if (!is_rpc && !is_virtual && omitted_methods.has(api_method.method.name)) continue;
 #endif
                     JSB_HANDLE_SCOPE(isolate);
                     v8::Local<v8::Object> method_info_obj = v8::Object::New(isolate);
                     build_method_info(isolate, context, method_info, method_info_obj);
-                    if (is_virtual) virtual_methods_obj->Set(context, virtual_methods_index++, method_info_obj).Check();
                     if (is_rpc) rpc_methods_obj->Set(context, rpc_methods_index++, method_info_obj).Check();
+
+                    if (is_virtual) virtual_methods_obj->Set(context, virtual_methods_index++, method_info_obj).Check();
+                    else
+                    {
 #if JSB_EXCLUDE_GETSET_METHODS
-                    if (omitted_methods.has(api_method.method.name)) continue;
+                        if (omitted_methods.has(api_method.method.name)) continue;
 #endif
-                    methods_obj->Set(context, methods_index++, method_info_obj).Check();
+                        methods_obj->Set(context, methods_index++, method_info_obj).Check();
+                    }
                 }
             }
 
@@ -485,7 +488,7 @@ namespace jsb
         jsb_check(builtin_class);
 
         v8::Local<v8::Object> class_info_obj = v8::Object::New(isolate);
-        set_field(isolate, context, class_info_obj, "name", internal::NamingUtil::get_class_name(Variant::get_type_name(TYPE)));
+        set_field(isolate, context, class_info_obj, "name", internal::NamingUtil::get_class_name(type_name));
         set_field(isolate, context, class_info_obj, "type", TYPE);
 
         if (builtin_class->has_indexing_return_type) {
@@ -552,7 +555,7 @@ namespace jsb
             for (const auto& op : builtin_class->operators) {
                 JSB_HANDLE_SCOPE(isolate);
                 v8::Local<v8::Object> obj = v8::Object::New(isolate);
-                set_field(isolate, context, obj, "name", jsb::internal::VariantUtil::get_variant_operator_name(op.op));
+                set_field(isolate, context, obj, "name", api_tool::get_variant_operator_name(op.op));
                 set_field(isolate, context, obj, "return_type", (int) op.return_type);
                 set_field(isolate, context, obj, "left_type", (int) op.left_type);
                 set_field(isolate, context, obj, "right_type", (int) op.right_type);
@@ -605,7 +608,7 @@ namespace jsb
         jsb_check(builtin_class);
 
         v8::Local<v8::Object> class_info_obj = v8::Object::New(isolate);
-        String class_name = internal::NamingUtil::get_class_name(Variant::get_type_name(TYPE));
+        String class_name = internal::NamingUtil::get_class_name(type_name);
         set_field(isolate, context, class_info_obj, "name", class_name);
         set_field(isolate, context, class_info_obj, "type", TYPE);
         
@@ -699,9 +702,10 @@ namespace jsb
         v8::Local<v8::Context> context = isolate->GetCurrentContext();
 
         const String name = impl::Helper::to_string(isolate, info[0]);
+        const String original_name = internal::StringNames::get_singleton().get_original_name(name);
 
         JSB_HANDLE_SCOPE(isolate);
-        if (auto doc = api_tool::find_document(name)) {
+        if (auto doc = api_tool::find_document(original_name)) {
             v8::Local<v8::Object> class_doc_obj = v8::Object::New(isolate);
             // set_field(isolate, context, class_doc_obj, "name", doc->name);
             // set_field(isolate, context, class_doc_obj, "description", doc->description);
@@ -731,8 +735,6 @@ set_field(isolate, context, class_doc_obj, "brief_description", doc->brief_descr
 
                         const String constant_name = internal::NamingUtil::get_constant_name(enum_value_doc.name);
                         v8::Local<v8::Name> js_constant_name = impl::Helper::new_string(isolate, constant_name);
-                        jsb_check(constants_obj->HasOwnProperty(context, js_constant_name).ToChecked());
-
                         constants_obj->Set(context, js_constant_name, constant_obj).Check();
                         set_field(isolate, context, constant_obj, "description", enum_value_doc.description);
                     }
@@ -1165,7 +1167,7 @@ set_field(isolate, context, class_doc_obj, "brief_description", doc->brief_descr
         editor_obj->Set(context, impl::Helper::new_string_ascii(isolate, "install_static_types"), JSB_NEW_FUNCTION(context, _install_static_types, {})).Check();
         editor_obj->Set(context, impl::Helper::new_string_ascii(isolate, "generate_types"), JSB_NEW_FUNCTION(context, _generate_types, {})).Check();
         editor_obj->Set(context, impl::Helper::new_string_ascii(isolate, "cleanup_invalid_files"), JSB_NEW_FUNCTION(context, _cleanup_invalid_files, {})).Check();
-        editor_obj->Set(context, impl::Helper::new_string_ascii(isolate, "VERSION"), impl::Helper::new_string(isolate, JSB_IMPL_VERSION_STRING)).Check(); // TODO: 更合理的邦本信息。.d.ts 中的 VERSION_DOCS_URL 没有对应调整
+        editor_obj->Set(context, impl::Helper::new_string_ascii(isolate, "VERSION_DOCS_URL"), impl::Helper::new_string(isolate, "https://docs.godotengine.org/en/latest")).Check(); // TODO: 版本链接拼接
     }
 }
 #else
@@ -1197,7 +1199,7 @@ namespace jsb
         editor_obj->Set(context, impl::Helper::new_string_ascii(isolate, "install_static_types"), editor_only).Check();
         editor_obj->Set(context, impl::Helper::new_string_ascii(isolate, "generate_types"), editor_only).Check();
         editor_obj->Set(context, impl::Helper::new_string_ascii(isolate, "cleanup_invalid_files"), editor_only).Check();
-        editor_obj->Set(context, impl::Helper::new_string_ascii(isolate, "VERSION"), impl::Helper::new_string_ascii(isolate, "")).Check();
+        editor_obj->Set(context, impl::Helper::new_string_ascii(isolate, "VERSION_DOCS_URL"), impl::Helper::new_string_ascii(isolate, "")).Check();
     }
 }
 #endif // endif JSB_WITH_EDITOR_UTILITY_FUNCS

@@ -12,7 +12,7 @@
 #include <godot_cpp/variant/dictionary.hpp>
 #include <godot_cpp/classes/global_constants.hpp>
 
-namespace api_tool {
+namespace api_tool::internal {
 
 class ApiParser {
 public:

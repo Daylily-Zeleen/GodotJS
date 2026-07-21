@@ -15,6 +15,9 @@ class GodotJSExportPlugin: public EditorExportPlugin
 {
     GDCLASS(GodotJSExportPlugin, EditorExportPlugin)
 
+protected:
+    static void _bind_methods();
+
 public:
     GodotJSExportPlugin();
     virtual String _get_name() const override;

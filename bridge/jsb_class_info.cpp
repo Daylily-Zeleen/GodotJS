@@ -195,7 +195,7 @@ namespace jsb
             const bool is_tool = class_obj->HasOwnProperty(p_context, jsb_symbol(environment, ClassToolScript)).FromMaybe(false);
             if (is_tool)
             {
-                p_class_info->flags = (ScriptClassFlags::Type) (p_class_info->flags | ScriptClassFlags::Tool);
+                p_class_info->flags.set_flag(ScriptClassFlags::Tool);
             }
         }
 
@@ -310,7 +310,7 @@ namespace jsb
         const Ref<GodotJSScript> script = ResourceLoader::get_singleton()->load(source_path, GodotJSScript::get_class_static());
         if (script.is_valid())
         {
-            jsb_unused(script->can_instantiate()); // make it loaded immediately
+            jsb_unused(script->_can_instantiate()); // make it loaded immediately
             const ScriptInstance* script_instance = script->instance_and_native_object_create(p_self, p_env->flags_ & Environment::EnvironmentFlags::EF_Shadow);
             jsb_unused(script_instance);
             jsb_check(script_instance);

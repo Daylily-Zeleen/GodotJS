@@ -6,35 +6,23 @@
 // PropertyHint, PropertyUsageFlags, GDExtensionClassMethodArgumentMetadata.
 // No redundant type definitions.
 
+#include <functional>
+
+
 #include "godot_cpp/core/property_info.hpp"
-#include "godot_cpp/core/object.hpp"
-#include <cstdint>
-#include <godot_cpp/variant/string.hpp>
-#include <godot_cpp/variant/string_name.hpp>
 #include <godot_cpp/variant/variant.hpp>
-#include <godot_cpp/classes/global_constants.hpp>
 #include <godot_cpp/templates/local_vector.hpp>
 
-namespace godot {
-class Variant;
-// ============================================================================
-// ValidatedPtr
-// ============================================================================
-using ValidatedUtilityFunction = void (*)(Variant *r_ret, const Variant **p_args, int p_argcount);
-using ValidatedConstructor = void (*)(Variant *r_base, const Variant **p_args);
-using ValidatedSetter = void (*)(Variant *base, const Variant *value);
-using ValidatedGetter = void (*)(const Variant *base, Variant *value);
-using ValidatedBuiltInMethod = void (*)(Variant *base, const Variant **p_args, int p_argcount, Variant *r_ret);
-};
+#include "core/api_tool_internal.h"
+
+#define stack_alloc(type, size) (type*) alloca(sizeof(type) * (size))
 
 namespace api_tool {
+namespace internal{
+class ApiStoreReader;
+}
 
-// ============================================================================
-// File format constants
-// ============================================================================
-
-constexpr uint32_t STORE_MAGIC = 0x41504946; // "APIF"
-constexpr uint32_t STORE_VERSION = 5; // v5: unified ApiClassDocument for Class and BuiltInClass
+const godot::String &get_variant_operator_name(godot::Variant::Operator p_op);
 
 // ============================================================================
 // Directory/file name constants
@@ -43,139 +31,293 @@ constexpr uint32_t STORE_VERSION = 5; // v5: unified ApiClassDocument for Class 
 constexpr const char *DIR_UTILITY_FUNCTIONS = "utility_functions";
 constexpr const char *DIR_BUILTIN_CLASSES = "builtin_classes";
 constexpr const char *DIR_CLASSES = "classes";
-constexpr const char *DIR_CONSTANTS = "constants";
+constexpr const char *DIR_GLOBAL_ENUMS = "global_enums";
+constexpr const char *DIR_GLOBAL_CONSTANTS = "global_constants";
 constexpr const char *DIR_SINGLETONS = "singletons";
 constexpr const char *DIR_NATIVE_STRUCTURES = "native_structures";
+
 constexpr const char *DIR_DOC_CLASSES = "documents/classes";
 constexpr const char *DIR_DOC_BUILTIN_CLASSES = "documents/builtin_classes";
 constexpr const char *DIR_DOC_UTILITY_FUNCTIONS = "documents/utility_functions";
 constexpr const char *DIR_DOC_GLOBAL_ENUMS = "documents/global_enums";
 constexpr const char *DIR_DOC_GLOBAL_CONSTANTS = "documents/global_constants";
-constexpr const char *FILE_EXT_DATA = ".api";
-constexpr const char *FILE_EXT_DOC = ".doc";
-constexpr const char *FILE_HEADER = "header.api";
-constexpr const char *FILE_UTILITY_FUNCTIONS = "utility_functions.api";
 
-// ============================================================================
-// Type parsing helpers (using godot::Variant::Type, no redefinition)
-// ============================================================================
+constexpr const char *FILE_EXT_DATA = ".capi";
+constexpr const char *FILE_EXT_DOC = ".bdoc";
 
-inline godot::Variant::Type parse_variant_type(const godot::String &p_type_name) {
-    using VT = godot::Variant::Type;
-    if (p_type_name == "Nil" || p_type_name.is_empty()) return VT::NIL;
-    if (p_type_name == "bool") return VT::BOOL;
-    if (p_type_name == "int") return VT::INT;
-    if (p_type_name == "float") return VT::FLOAT;
-    if (p_type_name == "String") return VT::STRING;
-    if (p_type_name == "Vector2") return VT::VECTOR2;
-    if (p_type_name == "Vector2i") return VT::VECTOR2I;
-    if (p_type_name == "Rect2") return VT::RECT2;
-    if (p_type_name == "Rect2i") return VT::RECT2I;
-    if (p_type_name == "Vector3") return VT::VECTOR3;
-    if (p_type_name == "Vector3i") return VT::VECTOR3I;
-    if (p_type_name == "Transform2D") return VT::TRANSFORM2D;
-    if (p_type_name == "Plane") return VT::PLANE;
-    if (p_type_name == "Quaternion") return VT::QUATERNION;
-    if (p_type_name == "AABB") return VT::AABB;
-    if (p_type_name == "Basis") return VT::BASIS;
-    if (p_type_name == "Transform3D") return VT::TRANSFORM3D;
-    if (p_type_name == "Projection") return VT::PROJECTION;
-    if (p_type_name == "Vector4") return VT::VECTOR4;
-    if (p_type_name == "Vector4i") return VT::VECTOR4I;
-    if (p_type_name == "RID") return VT::RID;
-    if (p_type_name == "Object") return VT::OBJECT;
-    if (p_type_name == "Callable") return VT::CALLABLE;
-    if (p_type_name == "Signal") return VT::SIGNAL;
-    if (p_type_name == "Dictionary") return VT::DICTIONARY;
-    if (p_type_name == "Array") return VT::ARRAY;
-    if (p_type_name == "PackedByteArray") return VT::PACKED_BYTE_ARRAY;
-    if (p_type_name == "PackedInt32Array") return VT::PACKED_INT32_ARRAY;
-    if (p_type_name == "PackedInt64Array") return VT::PACKED_INT64_ARRAY;
-    if (p_type_name == "PackedFloat32Array") return VT::PACKED_FLOAT32_ARRAY;
-    if (p_type_name == "PackedFloat64Array") return VT::PACKED_FLOAT64_ARRAY;
-    if (p_type_name == "PackedStringArray") return VT::PACKED_STRING_ARRAY;
-    if (p_type_name == "PackedVector2Array") return VT::PACKED_VECTOR2_ARRAY;
-    if (p_type_name == "PackedVector3Array") return VT::PACKED_VECTOR3_ARRAY;
-    if (p_type_name == "PackedColorArray") return VT::PACKED_COLOR_ARRAY;
-    if (p_type_name == "PackedVector4Array") return VT::PACKED_VECTOR4_ARRAY;
-    return VT::NIL;
-}
-
-inline bool is_object_type(const godot::StringName &p_type) {
-    godot::String s(p_type);
-    if (s.is_empty() || s == "Nil") return false;
-    char32_t c = s[0];
-    if (c < 'A' || c > 'Z') return false;
-    if (s == "AABB" || s == "RID") return false;
-    return true;
-}
-
-inline bool is_enum_type(const godot::StringName &p_type) {
-    godot::String s(p_type);
-    return s.contains(".") || s.begins_with("enum::");
-}
-
-inline godot::StringName extract_enum_class(const godot::StringName &p_type) {
-    godot::String s(p_type);
-    if (s.begins_with("enum::")) {
-        s = s.substr(6);
-    }
-    int dot = s.find(".");
-    if (dot >= 0) {
-        return godot::StringName(s.left(dot));
-    }
-    return godot::StringName(s);
-}
-
-// ============================================================================
-// Meta string -> GDExtensionClassMethodArgumentMetadata conversion
-// ============================================================================
-
-inline GDExtensionClassMethodArgumentMetadata parse_argument_metadata(const godot::StringName &p_meta) {
-    godot::String s(p_meta);
-    if (s == "int8") return GDEXTENSION_METHOD_ARGUMENT_METADATA_INT_IS_INT8;
-    if (s == "int16") return GDEXTENSION_METHOD_ARGUMENT_METADATA_INT_IS_INT16;
-    if (s == "int32") return GDEXTENSION_METHOD_ARGUMENT_METADATA_INT_IS_INT32;
-    if (s == "int64") return GDEXTENSION_METHOD_ARGUMENT_METADATA_INT_IS_INT64;
-    if (s == "uint8") return GDEXTENSION_METHOD_ARGUMENT_METADATA_INT_IS_UINT8;
-    if (s == "uint16") return GDEXTENSION_METHOD_ARGUMENT_METADATA_INT_IS_UINT16;
-    if (s == "uint32") return GDEXTENSION_METHOD_ARGUMENT_METADATA_INT_IS_UINT32;
-    if (s == "uint64") return GDEXTENSION_METHOD_ARGUMENT_METADATA_INT_IS_UINT64;
-    if (s == "float") return GDEXTENSION_METHOD_ARGUMENT_METADATA_REAL_IS_FLOAT;
-    if (s == "double") return GDEXTENSION_METHOD_ARGUMENT_METADATA_REAL_IS_DOUBLE;
-    return GDEXTENSION_METHOD_ARGUMENT_METADATA_NONE;
-}
+constexpr const char *FILE_HEADER = "header.capi";
+constexpr const char *FILE_UTILITY_FUNCTIONS = "utility_functions.capi";
 
 // ============================================================================
 // Header / Metadata
 // ============================================================================
+enum class RealPrecision : int8_t {
+    SINGLE,
+    DOUBLE,
+};
 
 struct ApiHeader {
-    int32_t version_major = 0;
-    int32_t version_minor = 0;
-    int32_t version_patch = 0;
     godot::String version_status;
     godot::String version_build;
     godot::String version_full_name;
-    godot::String precision;
+
+    int32_t version_major = 0;
+    int32_t version_minor = 0;
+    int32_t version_patch = 0;
+
+    RealPrecision precision = RealPrecision::SINGLE; 
 };
 
 // ============================================================================
 // MethodInfo wrapper (reuses godot::MethodInfo + JSON-specific fields)
 // ============================================================================
 
-struct ApiMethodInfo {
-    godot::MethodInfo method; // Reuse godot-cpp: name, return_val, flags, arguments, default_arguments, metadata
-    int64_t hash = 0;
-    godot::LocalVector<int64_t> hash_compatibility;
+struct ApiMethodBase {
+    godot::MethodInfo method;
+    uint32_t hash = 0;
+
+public:
+    _FORCE_INLINE_ bool is_vararg() const {return method.flags & godot::METHOD_FLAG_VARARG; }
+    _FORCE_INLINE_ bool has_returns() const {return internal::has_returns(method);}
 };
 
-struct ApiMethodInfoBuiltIn : public ApiMethodInfo {
-    godot::ValidatedBuiltInMethod func; // TODO: 通过 gdextension_interface.h 的 C 接口加载
+struct ApiMemberMethodBase: public ApiMethodBase {
+    godot::LocalVector<int64_t> hash_compatibility; // TODO: 移除，不保存在 ApiMemberMethodBase 中，如有需要，通过 api_tool 的对外接口查询内建类与非内建类特定函数的兼容性哈希值
+public:
+    _FORCE_INLINE_ bool is_static() const {return method.flags & godot::METHOD_FLAG_STATIC;}
 };
 
-struct ApiMethodInfoBind: public ApiMethodInfo {
-    GDExtensionMethodBindPtr method_bind; // TODO: 通过 gdextension_interface.h 的 C 接口加载
+struct ApiBuiltInMethod : public ApiMemberMethodBase {
+private:
+    mutable GDExtensionPtrBuiltInMethod func = nullptr; // Private member, loaded lazily
+
+    godot::Variant::Type variant_type = godot::Variant::NIL; // Store type for lazy loading
+
+    mutable bool is_static_ = false;
+    mutable bool is_vararg_ = false;
+    mutable bool has_returns_ = false;
+
+    friend class internal::ApiStoreReader;
+public:
+    _FORCE_INLINE_ GDExtensionPtrBuiltInMethod get_func_ptr() const { 
+        using namespace godot;
+        if (unlikely(!func)) {
+            func = ::godot::gdextension_interface::variant_get_ptr_builtin_method(
+                (GDExtensionVariantType) variant_type,
+                method.name._native_ptr(),
+                (GDExtensionInt)hash
+            );
+            if (func == nullptr) {
+                ERR_PRINT_ONCE("Failed to load built in function: " + Variant::get_type_name(variant_type) + "::" + method.name);
+                return func;
+            }
+            is_static_ = is_static();
+            has_returns_ = has_returns();
+            is_vararg_ = is_vararg();
+        }
+        return func;
+    }
+    // _FORCE_INLINE_  TODO
+    void validated_call(godot::Variant *base, const godot::Variant **p_args, int p_argcount, godot::Variant *r_ret) const {
+        using namespace godot;
+        GDExtensionPtrBuiltInMethod func_ptr = get_func_ptr();
+        ERR_FAIL_NULL_MSG(func_ptr, "Call on missing built-in function: " + Variant::get_type_name(variant_type) + "::" + method.name);
+
+        // base
+        void *base_ptr {stack_alloc(Variant, 1)};
+        if (!is_static_) {
+            ERR_FAIL_COND_MSG(!base, "Call to non-static method without base object! (missing base argument)");
+            internal::var_to_arg_ptr(*base, base_ptr, variant_type);
+        }
+
+        // arguments
+        const auto &arguments = method.arguments;
+        const auto &meta_list = method.arguments_metadata;
+        const auto &default_values = method.default_arguments;
+        const uint32_t default_value_size = default_values.size();
+        const uint32_t method_argcount = arguments.size();
+        const uint32_t missing = method_argcount - (uint32_t)p_argcount;
+        int argcount = MAX(p_argcount, method_argcount);
+
+        Variant *var_args = stack_alloc(Variant, argcount);
+		GDExtensionTypePtr *ptr_args = stack_alloc(GDExtensionTypePtr, argcount);
+        Variant::Type *args_type = stack_alloc(Variant::Type, argcount);
+		for (int i = 0; i < argcount; i++) {
+            // Arg
+            const Variant *arg {nullptr};
+            if (i < p_argcount) {
+                arg = p_args[i];
+            } else {
+                arg = &default_values[i - p_argcount + (default_value_size - missing)];
+            }
+            // Type
+            if (i < arguments.size()) {
+                args_type[i] = arguments[i].type;
+            } else {
+                CRASH_COND(is_vararg_);
+                args_type[i] = Variant::NIL;
+            }
+            // Meta
+            GDExtensionClassMethodArgumentMetadata meta = i < meta_list.size()? meta_list[i] : GDEXTENSION_METHOD_ARGUMENT_METADATA_NONE;
+
+            // ArgPtr
+            Variant *arg_ptr_ = var_args + i;
+            internal::var_to_arg_ptr(*arg, arg_ptr_, args_type[i], meta);
+
+			ptr_args[i] = arg_ptr_;
+		}
+
+        void *ret_ptr = stack_alloc(Variant, 1);
+        if (has_returns_) {
+            internal::ctor_arg_ptr(ret_ptr, method.return_val.type);
+            CRASH_COND_MSG(ret_ptr == nullptr, "???");
+        }
+        func_ptr(is_static_? nullptr: base_ptr, ptr_args, ret_ptr, argcount);
+
+        if (!is_static_) internal::dctor_arg_ptr(base_ptr, base->get_type());
+        while (argcount > 0) { argcount--; internal::dctor_arg_ptr(ptr_args[argcount], args_type[argcount]); }
+        if (has_returns_) {
+            if (r_ret) internal::arg_ptr_to_var(ret_ptr, method.return_val.type, *r_ret, method.return_val_metadata);
+
+            internal::dctor_arg_ptr(ret_ptr, method.return_val.type);
+        }
+    };
+
+    // Setter for variant_type (called during parsing)
+    inline void set_variant_type(godot::Variant::Type p_type) {
+        variant_type = p_type;
+    }
+};
+
+struct ApiClassMethod: public ApiMemberMethodBase {
+private:
+    mutable GDExtensionMethodBindPtr method_bind = nullptr;
+    godot::StringName owner_class_name;
+
+    mutable bool is_static_ = false;
+    mutable bool is_vararg_ = false;
+    mutable bool has_returns_ = false;
+
+    friend class internal::ApiStoreReader;
+
+public:
+    _FORCE_INLINE_ bool is_virtual() const { return method.flags & (godot::METHOD_FLAG_VIRTUAL | godot::METHOD_FLAG_VIRTUAL_REQUIRED) ; }
+    _FORCE_INLINE_ GDExtensionMethodBindPtr get_method_bind_ptr() const { 
+        if (unlikely(!method_bind)) {
+            method_bind = ::godot::gdextension_interface::classdb_get_method_bind(
+                owner_class_name._native_ptr(),
+                method.name._native_ptr(),
+                (GDExtensionInt)hash
+            );
+            if (method_bind == nullptr) {
+                ERR_PRINT_ONCE("Failed to load function: " + owner_class_name + "::" + method.name);
+                return method_bind;
+            }
+            is_static_ = is_static();
+            has_returns_ = has_returns();
+            is_vararg_ = is_vararg();
+        }
+        return method_bind;
+    }
+    _FORCE_INLINE_ godot::Variant validated_call(godot::Object *p_object, const godot::Variant **p_args, int p_argcount, GDExtensionCallError &r_error) const {
+        using namespace godot;
+        Variant ret;
+        const GDExtensionMethodBindPtr method_bind_ptr = get_method_bind_ptr();
+        ERR_FAIL_NULL_V_MSG(method_bind_ptr, ret, "Call on missing function: " + owner_class_name + "::" + method.name);
+        // instance
+        ERR_FAIL_COND_V_MSG(!is_static_ && p_object == nullptr, ret, "Call to non-static method without base object! (missing base argument)");
+
+        ::godot::gdextension_interface::object_method_bind_call(
+            method_bind_ptr, is_static_? nullptr: p_object->_owner, (const GDExtensionConstVariantPtr *)p_args, p_argcount, &ret, &r_error);
+
+        return ret;
+    };
+};
+
+// ============================================================================
+// Utility Function (reuses MethodInfo)
+// ============================================================================
+
+struct ApiUtilityFunction : public ApiMethodBase{
+    godot::StringName category;
+
+private:
+    mutable GDExtensionPtrUtilityFunction func = nullptr; // Private member, loaded lazily
+    mutable bool has_returns_ = false;
+    mutable bool is_vararg_ = false;
+
+public:
+    _FORCE_INLINE_ GDExtensionPtrUtilityFunction get_func_ptr() const {
+        using namespace godot;
+        if (unlikely(!func)) {
+            func = ::godot::gdextension_interface::variant_get_ptr_utility_function(
+                    method.name._native_ptr(),
+                    static_cast<GDExtensionInt>(hash)
+            );
+            if (func == nullptr) {
+                ERR_PRINT_ONCE("Failed to load utility function: " + method.name);
+                return nullptr;
+            }
+            has_returns_ = has_returns();
+            is_vararg_ = is_vararg();
+        }
+        return func;
+    }
+    _FORCE_INLINE_ void validated_call(godot::Variant *r_ret, const godot::Variant **p_args, int p_argcount) const {
+        using namespace godot;
+        const GDExtensionPtrUtilityFunction func_ptr = get_func_ptr();
+        ERR_FAIL_NULL_MSG(func_ptr, "Call on missing utility function: " + method.name);
+
+        const auto &arguments = method.arguments;
+        const auto &meta_list = method.arguments_metadata;
+        const auto &default_values = method.default_arguments;
+        const uint32_t default_value_size = default_values.size();
+        const uint32_t method_argcount = arguments.size();
+        const uint32_t missing = method_argcount - (uint32_t)p_argcount;
+        int argcount = MAX(p_argcount, method_argcount);
+
+        Variant *var_args = stack_alloc(Variant, argcount);
+		void **ptr_args = stack_alloc(void *, argcount);
+        Variant::Type *args_type = stack_alloc(Variant::Type, argcount);
+		for (int i = 0; i < argcount; i++) {
+            // Arg
+            const Variant *arg {nullptr};
+            if (i < p_argcount) {
+                arg = p_args[i];
+            } else {
+                arg = &default_values[i - p_argcount + (default_value_size - missing)];
+            }
+            // Type
+            if (i < arguments.size()) {
+                args_type[i] = arguments[i].type;
+            } else {
+                CRASH_COND(is_vararg_);
+                args_type[i] = Variant::NIL;
+            }
+            // Meta
+            GDExtensionClassMethodArgumentMetadata meta = i < meta_list.size()? meta_list[i] : GDEXTENSION_METHOD_ARGUMENT_METADATA_NONE;
+
+            // ArgPtr
+            Variant *arg_ptr_ = var_args + i;
+            internal::var_to_arg_ptr(*arg, arg_ptr_, args_type[i], meta);
+
+			ptr_args[i] = arg_ptr_;
+		}
+
+        void *ret_ptr = stack_alloc(Variant, 1);
+        if (has_returns_) {
+            internal::ctor_arg_ptr(ret_ptr, method.return_val.type);
+            CRASH_COND_MSG(ret_ptr == nullptr, "???");
+        }
+        func_ptr(ret_ptr, ptr_args, argcount);
+
+        while (argcount > 0) { argcount--; internal::dctor_arg_ptr(ptr_args[argcount], args_type[argcount]); }
+        if(has_returns_) {
+            if (r_ret) internal::arg_ptr_to_var(ret_ptr, method.return_val.type, *r_ret, method.return_val_metadata);
+
+            internal::dctor_arg_ptr(ret_ptr, method.return_val.type);
+        }
+    };
 };
 
 // ============================================================================
@@ -187,9 +329,6 @@ struct ApiPropertyInfo {
     godot::StringName setter;
     godot::StringName getter;
     int32_t index = -1; // Property index (for builtin classes with members)
-
-    godot::ValidatedSetter setter_func; // TODO: 通过 gdextension_interface.h 的 C 接口加载。注意只有 index < 0 才有访问器函数
-    godot::ValidatedGetter getter_func; // TODO: 通过 gdextension_interface.h 的 C 接口加载。注意只有 index < 0 才有访问器函数
 };
 
 // ============================================================================
@@ -197,8 +336,8 @@ struct ApiPropertyInfo {
 // ============================================================================
 
 struct ApiSignalInfo {
-    godot::StringName name;
     godot::LocalVector<godot::PropertyInfo> arguments;
+    godot::StringName name;
 };
 
 // ============================================================================
@@ -211,9 +350,9 @@ struct ApiEnumValue {
 };
 
 struct ApiEnumInfo {
+    godot::LocalVector<ApiEnumValue> values;
     godot::StringName name;
     bool is_bitfield = false;
-    godot::LocalVector<ApiEnumValue> values;
 };
 
 struct ApiConstantInfo {
@@ -235,46 +374,251 @@ struct ApiOperatorInfo {
     godot::Variant::Type return_type = godot::Variant::NIL;
     godot::Variant::Type left_type = godot::Variant::NIL;
     godot::Variant::Type right_type = godot::Variant::NIL;
+
+private:
+    GDExtensionPtrOperatorEvaluator op_evaluator;
+
+    friend class ApiBuiltinClass;
+    void initialize(const godot::Variant::Type &p_left_type) {
+        using namespace godot;
+        left_type = p_left_type;
+        op_evaluator = gdextension_interface::variant_get_ptr_operator_evaluator(
+            (GDExtensionVariantOperator)op,
+            (GDExtensionVariantType)left_type,
+            (GDExtensionVariantType)right_type
+        );
+        ERR_FAIL_COND_MSG(!op_evaluator, 
+            vformat("Failed to load operator evaluator: %s vs %s - op code(%s)",
+                Variant::get_type_name(left_type), Variant::get_type_name(right_type), get_variant_operator_name(op)));
+    }
+public:
+    _FORCE_INLINE_ GDExtensionPtrOperatorEvaluator get_op_evaluator_ptr() const { return op_evaluator; }
+    _FORCE_INLINE_ godot::Variant evaluate(const godot::Variant &p_left, const godot::Variant &p_right) const {
+        using namespace godot;
+        void* left = stack_alloc(Variant, 1);
+        void* right = stack_alloc(Variant, 1);
+        internal::var_to_arg_ptr(p_left, left, left_type);
+        internal::var_to_arg_ptr(p_right, right, right_type);
+
+        void* result = stack_alloc(Variant, 1);
+        internal::ctor_arg_ptr(result, return_type);
+
+        op_evaluator(left, right, result);
+
+        Variant ret;
+        internal::arg_ptr_to_var(result, return_type, ret);
+
+        internal::dctor_arg_ptr(left, p_left.get_type());
+        internal::dctor_arg_ptr(right, p_right.get_type());
+        internal::dctor_arg_ptr(result, return_type);
+
+        return ret;
+    }
 };
 
 struct ApiConstructorInfo {
     godot::LocalVector<godot::PropertyInfo> arguments;
+
+private:
+    GDExtensionPtrConstructor constructor;
+    godot::Variant::Type type;
+
+    friend class ApiBuiltinClass;
+    void initialize(const godot::Variant::Type &p_type, const int32_t p_index) {
+        using namespace godot;
+        type = p_type;
+        constructor = gdextension_interface::variant_get_ptr_constructor((GDExtensionVariantType)p_type, (int32_t)p_index);
+        ERR_FAIL_COND_MSG(!constructor, vformat("Can't load %s constructor (index: %s)", Variant::get_type_name(p_type), p_index));
+    }
+public:
+    _FORCE_INLINE_ GDExtensionPtrConstructor get_constructor_ptr() const { return constructor; }
+
+    _FORCE_INLINE_ godot::Variant validated_construct(const godot::Variant **p_args, int p_argcount) const {
+        using namespace godot;
+
+        ERR_FAIL_COND_V(p_argcount != arguments.size(), {});
+
+        // arguments
+        Variant *var_args = stack_alloc(Variant, p_argcount);
+		GDExtensionTypePtr *ptr_args = stack_alloc(GDExtensionTypePtr, p_argcount);
+        Variant::Type *args_type = stack_alloc(Variant::Type, p_argcount);
+		for (int i = 0; i < p_argcount; i++) {
+            const Variant* arg_ptr = p_args[i];
+            internal::var_to_arg_ptr(*arg_ptr, var_args + i, arguments[i].type);
+			ptr_args[i] = var_args + i;
+            args_type[i] = arg_ptr->get_type();
+		}
+
+        void *ret_ptr = stack_alloc(Variant, 1);
+        constructor(ret_ptr, ptr_args);
+
+        Variant ret;
+        internal::arg_ptr_to_var(ret_ptr, type, ret);
+
+        while (p_argcount > 0) { p_argcount--; internal::dctor_arg_ptr(ptr_args[p_argcount], args_type[p_argcount]); }
+        internal::dctor_arg_ptr(ret_ptr, type);
+        return ret;
+    }
 };
 
 struct ApiMemberInfo {
     godot::StringName name;
     godot::Variant::Type type = godot::Variant::NIL;
+
+private:
+    mutable GDExtensionPtrSetter setter_func = nullptr; // Private member, loaded lazily
+    mutable GDExtensionPtrGetter getter_func = nullptr; // Private member, loaded lazily
+
+    friend class ApiBuiltinClass;
+    void initialize(const godot::Variant::Type &p_type) {
+        using namespace godot;
+        setter_func = gdextension_interface::variant_get_ptr_setter((GDExtensionVariantType) p_type, name._native_ptr());
+        if (!setter_func) WARN_PRINT("Failed to load setter: " + Variant::get_type_name(p_type) + "::" + name);
+        getter_func = gdextension_interface::variant_get_ptr_getter((GDExtensionVariantType) p_type, name._native_ptr());
+        if (!setter_func) WARN_PRINT("Failed to load Getter: " + Variant::get_type_name(p_type) + "::" + name);
+    }
+public:
+    _FORCE_INLINE_ GDExtensionPtrSetter get_setter_ptr() const { return setter_func; }
+    _FORCE_INLINE_ GDExtensionPtrGetter get_getter_ptr() const { return getter_func; }
+
+    _FORCE_INLINE_ void setter_validated_call(godot::Variant &p_base, const godot::Variant &p_value) const {
+        using namespace godot;
+        ERR_FAIL_NULL(setter_func);
+        void* base =  stack_alloc(Variant, 1);
+        void* value = stack_alloc(Variant, 1);
+        internal::var_to_arg_ptr(p_base, base);
+        internal::var_to_arg_ptr(p_value, value, type);
+        setter_func(base, value);
+
+        internal::dctor_arg_ptr(base, p_base.get_type());
+        internal::dctor_arg_ptr(value, p_value.get_type());
+    }
+    _FORCE_INLINE_ void getter_validated_call(const godot::Variant &p_base, godot::Variant &r_value) const {
+        using namespace godot;
+        ERR_FAIL_NULL(getter_func);
+        void* base =  stack_alloc(Variant, 1);
+        void* value = stack_alloc(Variant, 1);
+        internal::var_to_arg_ptr(p_base, base);
+        internal::ctor_arg_ptr(value, type);
+        getter_func(base, value);
+        internal::arg_ptr_to_var(value, type, r_value);
+
+        internal::dctor_arg_ptr(base, p_base.get_type());
+        internal::dctor_arg_ptr(value, type);
+    }
 };
 
-// ============================================================================
-// Utility Function (reuses MethodInfo)
-// ============================================================================
-
-struct ApiUtilityFunction {
-    godot::MethodInfo method; // Reuse MethodInfo (name, return_val, flags, args, etc.)
-    int64_t hash = 0;
-    godot::StringName category;
-
-    godot::ValidatedUtilityFunction func; // TODO: 通过 gdextension_interface.h 的 C 接口加载
-};
 
 // ============================================================================
 // Builtin Class
 // ============================================================================
 
 struct ApiBuiltinClass {
-    godot::StringName name;
-    godot::Variant::Type variant_type = godot::Variant::NIL;
-    bool has_indexing_return_type = false;
-    godot::Variant::Type indexing_type = godot::Variant::NIL;
-    bool is_keyed = false;
-    bool has_destructor = false;
     godot::LocalVector<ApiMemberInfo> members;
     godot::LocalVector<ApiBuiltInClassConstantInfo> constants;
     godot::LocalVector<ApiEnumInfo> enums;
-    godot::LocalVector<ApiMethodInfoBuiltIn> methods; // TODO: 修改为 godot::LocalVector<ApiMethodInfoBuiltIn>, 相应调整其他逻辑
+    godot::LocalVector<ApiBuiltInMethod> methods;
     godot::LocalVector<ApiOperatorInfo> operators;
     godot::LocalVector<ApiConstructorInfo> constructors;
+
+    godot::Variant::Type type = godot::Variant::NIL;
+    godot::Variant::Type indexing_type = godot::Variant::NIL;
+    bool has_indexing_return_type = false;
+    bool is_keyed = false;
+    bool has_destructor = false;
+
+private:
+    mutable GDExtensionPtrIndexedGetter indexed_getter {nullptr};
+    mutable GDExtensionPtrIndexedSetter indexed_setter {nullptr};
+
+    mutable GDExtensionPtrKeyedGetter keyed_getter {nullptr};
+    mutable GDExtensionPtrKeyedSetter keyed_setter {nullptr};
+
+    friend class internal::ApiStoreReader;
+    void initialize() {
+        for (auto &member : members) member.initialize(type);
+        for (uint32_t idx = 0; idx < constructors.size(); ++idx) constructors[idx].initialize(type, idx);
+        for (auto &op: operators) op.initialize(type);
+    }
+public:
+    _FORCE_INLINE_ void indexed_getter_validated_call(godot::Variant &p_base, int64_t p_index, godot::Variant &r_value) const {
+        using namespace godot;
+        if (unlikely(!indexed_getter)) {
+            indexed_getter = ::godot::gdextension_interface::variant_get_ptr_indexed_getter(
+                (GDExtensionVariantType) type
+            );
+            if(!indexed_getter) {
+                ERR_PRINT_ONCE("Failed to load indexed getter for type  " + Variant::get_type_name(type));
+                return;
+            }
+        }
+
+        void* base =  stack_alloc(Variant, 1);
+        void* value = stack_alloc(Variant, 1);
+        internal::var_to_arg_ptr(p_base, base, type);
+        internal::ctor_arg_ptr(value, indexing_type);
+        indexed_getter(base, (GDExtensionInt)p_index, value);
+        internal::arg_ptr_to_var(value, indexing_type, r_value);
+
+        internal::dctor_arg_ptr(base, type);
+        internal::dctor_arg_ptr(value, indexing_type);
+    }
+    _FORCE_INLINE_ void indexed_setter_validated_call(const godot::Variant &p_base, int64_t p_index, godot::Variant &p_value) const {
+        using namespace godot;
+        if (unlikely(!indexed_setter)) {
+            indexed_setter = ::godot::gdextension_interface::variant_get_ptr_indexed_setter(
+                (GDExtensionVariantType) type
+            );
+            if(!indexed_setter) {
+                ERR_PRINT_ONCE("Failed to load indexed setter for type " + Variant::get_type_name(type));
+                return;
+            }
+        }
+
+        void* base =  stack_alloc(Variant, 1);
+        void* value = stack_alloc(Variant, 1);
+        internal::var_to_arg_ptr(p_base, base, type);
+        internal::var_to_arg_ptr(p_value, value, indexing_type);
+        indexed_setter(base, (GDExtensionInt)p_index, value);
+
+        internal::dctor_arg_ptr(base, type);
+        internal::dctor_arg_ptr(value, indexing_type);
+    }
+
+    // 只有 Dictionary 有效
+    _FORCE_INLINE_ void keyed_getter_validated_call(godot::Variant &p_base, const godot::Variant &p_key, godot::Variant &r_value) const {
+        using namespace godot;
+        if (unlikely(!keyed_getter)) {
+            keyed_getter = ::godot::gdextension_interface::variant_get_ptr_keyed_getter(
+                (GDExtensionVariantType) type
+            );
+            if(!keyed_getter) {
+                ERR_PRINT_ONCE("Failed to load keyed getter for type  " + Variant::get_type_name(type));
+                return;
+            }
+        }
+
+        void* base =  stack_alloc(Variant, 1);
+        internal::var_to_arg_ptr(p_base, base, type);
+        keyed_getter(base, &p_key, &r_value);
+    }
+    // 只有 Dictionary 有效
+    _FORCE_INLINE_ void keyed_setter_validated_call(const godot::Variant &p_base, const godot::Variant &p_key, godot::Variant &p_value) const {
+        using namespace godot;
+        if (unlikely(!keyed_setter)) {
+            keyed_setter = ::godot::gdextension_interface::variant_get_ptr_keyed_setter(
+                (GDExtensionVariantType) type
+            );
+            if(!keyed_setter) {
+                ERR_PRINT_ONCE("Failed to load indexed getter for type " +  Variant::get_type_name(type));
+                return;
+            }
+        }
+
+        void* base =  stack_alloc(Variant, 1);
+        internal::var_to_arg_ptr(p_base, base, type);
+        keyed_setter(base, &p_key, &p_value);
+    }
 };
 
 // ============================================================================
@@ -282,16 +626,16 @@ struct ApiBuiltinClass {
 // ============================================================================
 
 struct ApiClass {
+    godot::LocalVector<ApiClassMethod> methods; // TODO: 根据 godot 的 ClassDB 的话 虚函数 和 非虚函数 是存在不同的map里，分别是 MethodInfo 和 MethodBind，是否考虑相应调整？
+    godot::LocalVector<ApiSignalInfo> signals;
+    godot::LocalVector<ApiPropertyInfo> properties;
+    godot::LocalVector<ApiEnumInfo> enums;
+    godot::LocalVector<ApiConstantInfo> constants;
     godot::StringName name;
     godot::StringName inherits;
     godot::StringName api_type;
     bool is_refcounted = false;
     bool is_instantiable = true;
-    godot::LocalVector<ApiMethodInfoBind> methods; // TODO: 修改为 godot::LocalVector<ApiMethodInfoBind>, 相应调整其他逻辑
-    godot::LocalVector<ApiSignalInfo> signals;
-    godot::LocalVector<ApiPropertyInfo> properties;
-    godot::LocalVector<ApiEnumInfo> enums;
-    godot::LocalVector<ApiConstantInfo> constants;
 };
 
 // ============================================================================
@@ -307,70 +651,50 @@ struct ApiSingleton {
 
 struct ApiNativeStructure {
     godot::String name;
-    godot::String format;
+    godot::String format; // TODO: 解析！
 };
 
 #pragma region Document structures
 // ============================================================================
 // Document sub-structures (stored in .doc files, generated during parsing)
 // ============================================================================
+namespace internal {
+    struct ApiNameDescriptionDocument {
+        godot::String name;
+        godot::String description;
+    };
+}
 
-struct ApiMethodDocument {
-    godot::String name;
-    godot::String description;
-};
+using ApiMethodDocument = internal::ApiNameDescriptionDocument;
 
 struct ApiSignalDocument {
-    godot::String name;
-    godot::String description;
     godot::LocalVector<godot::PropertyInfo> arguments;
-};
-
-struct ApiPropertyDocument {
     godot::String name;
     godot::String description;
 };
 
-struct ApiMemberDocument {
-    godot::String name;
-    godot::String description;
-};
+using ApiPropertyDocument = internal::ApiNameDescriptionDocument;
 
-struct ApiConstantDocument {
-    godot::String name;
-    godot::String description;
-};
+using ApiMemberDocument = internal::ApiNameDescriptionDocument;
 
-struct ApiEnumValueDocument {
-    godot::String name;
-    godot::String description;
-};
+using ApiConstantDocument = internal::ApiNameDescriptionDocument;
+
+using ApiEnumValueDocument = internal::ApiNameDescriptionDocument;
 
 struct ApiEnumDocument {
-    godot::String name;
     godot::LocalVector<ApiEnumValueDocument> values;
-};
-
-struct ApiOperatorDocument {
     godot::String name;
-    godot::String description;
 };
 
-struct ApiConstructorDocument {
-    int32_t index = 0;
-    godot::String description;
+using ApiOperatorDocument = internal::ApiNameDescriptionDocument;
 
-    godot::ValidatedConstructor func; // TODO: 通过 gdextension_interface.h 的 C 接口加载
-};
+using ApiConstructorDocument = internal::ApiNameDescriptionDocument;
 
 // ============================================================================
 // Top-level document structures (one .doc file per entity)
 // ============================================================================
 
 struct ApiClassDocument {
-    godot::String name;
-    godot::String brief_description;
-    godot::String description;
     godot::LocalVector<ApiMethodDocument> methods;
     godot::LocalVector<ApiSignalDocument> signals;
     godot::LocalVector<ApiPropertyDocument> properties;
@@ -379,28 +703,29 @@ struct ApiClassDocument {
     godot::LocalVector<ApiConstantDocument> constants;
     godot::LocalVector<ApiOperatorDocument> operators;
     godot::LocalVector<ApiConstructorDocument> constructors;
-};
-
-struct ApiUtilityFunctionDocument {
     godot::String name;
+    godot::String brief_description;
     godot::String description;
 };
+
+using ApiUtilityFunctionDocument = internal::ApiNameDescriptionDocument;
 
 struct ApiGlobalEnumDocument {
-    godot::String name;
     godot::LocalVector<ApiEnumValueDocument> values;
+    godot::String name;
 };
 
-struct ApiGlobalConstantDocument {
-    godot::String name;
-    godot::String description;
-};
+using ApiGlobalConstantDocument = internal::ApiNameDescriptionDocument;
 #pragma endregion Document structures
 
-// ============================================================================
-// Cache invalidation callback type
-// ============================================================================
-
-using CacheInvalidatedCallback = void (*)(void *userdata);
-
 } // namespace api_tool
+
+// ============================================================================
+// Cache invalidation callback types (global scope for cross-namespace use)
+// ============================================================================
+
+// Cache invalidation callback type (global scope for cross-namespace use)
+using CacheInvalidatedCallback = std::function<void()>;
+
+// Cache invalidation handle type (global scope for cross-namespace use)
+using CacheInvalidatedHandle = int32_t;

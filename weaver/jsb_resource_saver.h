@@ -7,6 +7,12 @@
 
 class ResourceFormatSaverGodotJSScript : public ResourceFormatSaver
 {
+    GDCLASS(ResourceFormatSaverGodotJSScript, ResourceFormatSaver)
+
+protected:
+    static void _bind_methods() {};
+
+private:
     bool add_uid_to_source(String &p_r_source, const String &p_path, int64_t p_uid = -1) const;
 
 public:

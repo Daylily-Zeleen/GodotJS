@@ -10,7 +10,7 @@
 #include "../api_tool_types.h"
 #include <godot_cpp/variant/string.hpp>
 
-namespace api_tool {
+namespace api_tool::internal {
 
 class ApiStoreWriter {
 public:

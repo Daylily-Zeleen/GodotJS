@@ -5,6 +5,7 @@
 #include "../bridge/jsb_type_convert.h"
 #include "../weaver/jsb_script.h"
 #include "../weaver/jsb_script_instance.h"
+#include "api_tool/api_tool.h"
 
 #include <godot_cpp/classes/animation_mixer.hpp>
 #include <godot_cpp/classes/animation_library.hpp>
@@ -332,6 +333,8 @@ void GodotJSEditorHelper::_bind_methods()
 
 Dictionary GodotJSEditorHelper::get_resource_type_descriptor(const String& p_path)
 {
+    ERR_FAIL_COND_V_MSG(!has_api_tool_data(), {}, "Please generate api tool data first.");
+
     Dictionary descriptor;
     Ref<Resource> resource = ResourceLoader::get_singleton()->load(p_path, "", ResourceLoader::CACHE_MODE_REUSE);
 
@@ -421,6 +424,8 @@ Dictionary GodotJSEditorHelper::get_resource_type_descriptor(const String& p_pat
 
 Dictionary GodotJSEditorHelper::get_scene_nodes(const String& p_path)
 {
+    ERR_FAIL_COND_V_MSG(!has_api_tool_data(), {}, "Please generate api tool data first.");
+
     Ref<PackedScene> scene_data = ResourceLoader::get_singleton()->load(p_path, "", ResourceLoader::CACHE_MODE_REPLACE);
 
     if (scene_data.is_null())
@@ -474,4 +479,14 @@ void GodotJSEditorHelper::show_toast(const String& p_text, int p_severity)
     {
         toaster->push_toast(p_text, (EditorToaster::Severity) p_severity);
     }
+}
+
+bool GodotJSEditorHelper::has_api_tool_data()
+{
+    return api_tool::has_generated_data();
+}
+
+void GodotJSEditorHelper::generate_api_tool_data()
+{
+    api_tool::full_generate_and_reboot();
 }

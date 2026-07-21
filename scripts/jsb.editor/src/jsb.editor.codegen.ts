@@ -767,7 +767,6 @@ class EditorProgress {
         if (godot.ClassDB.class_exists("GodotJSEditorPlugin"))
             godot.ClassDB.class_call_static("GodotJSEditorPlugin", "finish_progress_task", this.task_name);
     }
-    [Symbol.dispose]() { this.finish(); }
 }
 
 class CodegenTasks {
@@ -785,7 +784,7 @@ class CodegenTasks {
     async submit() {
         let force_wait = 24;
 
-        using progress = new EditorProgress(`codegen-${this._name}`, this.tasks.length);
+        const progress = new EditorProgress(`codegen-${this._name}`, this.tasks.length);
 
         try {
             for (let i = 0; i < this.tasks.length; ++i) {
@@ -793,6 +792,7 @@ class CodegenTasks {
                 const result = task.execute();
 
                 if (typeof result === "object" && result instanceof Promise) {
+                    console.log(`Task: ${task.name}`);
                     progress.update(task.name, i);
                     await result;
                 } else {
@@ -803,7 +803,7 @@ class CodegenTasks {
                 }
             }
 
-            // progress.finish();
+            progress.finish();
 
             const message = `${this._name} generated successfully`;
 
@@ -819,7 +819,7 @@ class CodegenTasks {
                 toast(`${this._name} failed!`);
             }
 
-            // progress.finish();
+            progress.finish();
         }
     }
 }
@@ -3153,6 +3153,9 @@ export class TypeDB {
         if (typeof class_doc === "boolean") {
             return undefined;
         }
+        if (typeof class_name === "undefined" || class_name.length <= 0) {
+            throw new Error(`WTF?? [${typeof class_name}] - [${class_name}]`); // should never happen
+        }
         let loaded_doc = jsb.editor.get_class_doc(class_name);
         this.class_docs[class_name] = loaded_doc || false;
         return loaded_doc;
@@ -3269,7 +3272,7 @@ export class TypeDB {
                 // PROPERTY_HINT_DICTIONARY_TYPE won't be present prior to 4.4
                 if (
                     info.type === godot.Variant.Type.TYPE_DICTIONARY &&
-                    "PROPERTY_HINT_DICTIONARY_TYPE" in godot.PropertyHint &&
+                    // "PROPERTY_HINT_DICTIONARY_TYPE" in godot.PropertyHint &&
                     info.hint === godot.PropertyHint.PROPERTY_HINT_DICTIONARY_TYPE &&
                     info.hint_string
                 ) {

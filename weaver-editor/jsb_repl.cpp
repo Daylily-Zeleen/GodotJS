@@ -3,6 +3,7 @@
 #include "jsb_editor_plugin.h"
 #include "../compat/jsb_compat.h"
 
+#include <godot_cpp/variant/callable_method_pointer.hpp>
 #include <godot_cpp/classes/v_box_container.hpp>
 #include <godot_cpp/classes/h_box_container.hpp>
 #include <godot_cpp/classes/panel.hpp>
@@ -18,12 +19,10 @@
 
 void GodotJSREPL::_bind_methods()
 {
-    ClassDB::bind_method(D_METHOD("_backlog_flush"), &GodotJSREPL::_backlog_flush);
 }
 
 GodotJSREPL::GodotJSREPL()
 {
-    sn_backlog_flush_ = StringName("_backlog_flush");
     //TODO list all created realm instances in REPL, interact with the currently selected one.
 
     input_submitting_ = false;
@@ -368,7 +367,7 @@ void GodotJSREPL::_backlog_flush()
 void GodotJSREPL::write(jsb::internal::ELogSeverity::Type p_severity, const String& p_text)
 {
     output_backlog_.add(p_text);
-    call_deferred(sn_backlog_flush_);
+    callable_mp(this, &GodotJSREPL::_backlog_flush).call_deferred();
 }
 
 void GodotJSREPL::add_history(const String &p_text)

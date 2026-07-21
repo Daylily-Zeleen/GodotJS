@@ -7,16 +7,12 @@
 
 class GodotJSMonitor : public Object
 {
-    GDCLASS(GodotJSMonitor, Object)
-
 private:
     Vector<StringName> monitor_names_;
     jsb::Statistics stats_;
     uint64_t last_flush_tick_ = 0;
 
 protected:
-    static void _bind_methods();
-
     void flush();
 
     JSB_DECLARE_MONITOR(objects);

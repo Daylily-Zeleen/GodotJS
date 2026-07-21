@@ -141,11 +141,13 @@ public:
     virtual TypedArray<Dictionary> _get_script_signal_list() const override;
 
     virtual bool _is_placeholder_fallback_enabled() const override { return loaded_ && !_is_valid(); }
+	virtual bool _has_property_default_value(const StringName &p_property) const override;
     virtual Variant _get_property_default_value(const StringName& p_property) const override;
 
     virtual void _update_exports() override;
 
     //editor tool
+	virtual Variant _get_script_method_argument_count(const StringName &p_method) const override;
     virtual TypedArray<Dictionary> _get_script_method_list() const override;
     virtual TypedArray<Dictionary> _get_script_property_list() const override;
 
@@ -164,9 +166,6 @@ public:
 
     virtual bool _editor_can_reload_from_file() override { return true; }
 
-#ifndef DISABLE_DEPRECATED
-    virtual bool _instance_has(Object *p_object) const override;
-#endif // !DISABLE_DEPRECATED
 
 #pragma endregion // Script Interface Implementation
 

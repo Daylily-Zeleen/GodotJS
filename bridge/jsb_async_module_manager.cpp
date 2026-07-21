@@ -17,7 +17,7 @@ namespace jsb
     
     bool AsyncModuleManager::is_valid(AsyncModuleToken p_token) const
     {
-        std::lock_guard<std::mutex> lock(modules_mutex_);
+        std::lock_guard lock(modules_mutex_);
         return modules_.is_valid_index(p_token);
     }
 

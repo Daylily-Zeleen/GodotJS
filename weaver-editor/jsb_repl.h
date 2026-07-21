@@ -11,8 +11,6 @@
 
 class GodotJSREPL : public HBoxContainer, public jsb::internal::IConsoleOutput
 {
-    GDCLASS(GodotJSREPL, HBoxContainer)
-
     struct OutputLine
     {
         String text;
@@ -38,7 +36,6 @@ private:
     PackedStringArray history_;
 
     jsb::internal::DoubleBuffered<String> output_backlog_;
-    StringName sn_backlog_flush_;
 
 private:
     Ref<Texture2D> get_editor_theme_icon(const StringName &p_name) const;

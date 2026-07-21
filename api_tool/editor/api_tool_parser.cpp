@@ -1,3 +1,4 @@
+#include "godot_cpp/core/class_db.hpp"
 #include "godot_cpp/core/error_macros.hpp"
 #ifdef TOOLS_ENABLED
 
@@ -16,7 +17,84 @@
 
 using namespace godot;
 
-namespace api_tool {
+namespace api_tool::internal {
+
+// ============================================================================
+// Meta string -> GDExtensionClassMethodArgumentMetadata conversion
+// ============================================================================
+
+inline GDExtensionClassMethodArgumentMetadata parse_argument_metadata(const StringName &p_meta) {
+    String s(p_meta);
+    if (s == "int8") return GDEXTENSION_METHOD_ARGUMENT_METADATA_INT_IS_INT8;
+    if (s == "int16") return GDEXTENSION_METHOD_ARGUMENT_METADATA_INT_IS_INT16;
+    if (s == "int32") return GDEXTENSION_METHOD_ARGUMENT_METADATA_INT_IS_INT32;
+    if (s == "int64") return GDEXTENSION_METHOD_ARGUMENT_METADATA_INT_IS_INT64;
+    if (s == "uint8") return GDEXTENSION_METHOD_ARGUMENT_METADATA_INT_IS_UINT8;
+    if (s == "uint16") return GDEXTENSION_METHOD_ARGUMENT_METADATA_INT_IS_UINT16;
+    if (s == "uint32") return GDEXTENSION_METHOD_ARGUMENT_METADATA_INT_IS_UINT32;
+    if (s == "uint64") return GDEXTENSION_METHOD_ARGUMENT_METADATA_INT_IS_UINT64;
+    if (s == "float") return GDEXTENSION_METHOD_ARGUMENT_METADATA_REAL_IS_FLOAT;
+    if (s == "double") return GDEXTENSION_METHOD_ARGUMENT_METADATA_REAL_IS_DOUBLE;
+    if (s == "char16") return GDEXTENSION_METHOD_ARGUMENT_METADATA_INT_IS_CHAR16;
+    if (s == "char32") return GDEXTENSION_METHOD_ARGUMENT_METADATA_INT_IS_CHAR32;
+    return GDEXTENSION_METHOD_ARGUMENT_METADATA_NONE;
+}
+
+inline Variant::Type parse_variant_type(const String &p_type_name, PropertyInfo *p_propinfo = nullptr) {
+    using VT = Variant::Type;
+    PropertyInfo dummy;
+    if (!p_propinfo) p_propinfo = &dummy;
+
+    VT ret = VT::NIL;
+    if (p_type_name == "" || p_type_name == "Nil") {
+        ret = VT::NIL;
+    } else if (p_type_name == "Variant")  {
+        ret = VT::NIL;
+        p_propinfo->usage |= PROPERTY_USAGE_NIL_IS_VARIANT;
+    } else ret =  Variant::get_type_by_name(p_type_name);
+
+    if (ret < Variant::NIL || ret >= Variant::VARIANT_MAX) {
+        if (p_type_name.ends_with("*")) {
+            ret = VT::INT;
+            p_propinfo->hint = PROPERTY_HINT_INT_IS_POINTER;
+            p_propinfo->hint_string = p_type_name == "void*" ? String("") : p_type_name.trim_suffix("*");
+        } else if (p_type_name.begins_with("enum::")) {
+            ret = VT::INT;
+            p_propinfo->class_name = p_type_name.trim_prefix("enum::"); // set class_name for object types
+            p_propinfo->usage |= PROPERTY_USAGE_CLASS_IS_ENUM;
+        } else if (p_type_name.begins_with("bitfield::")) {
+            ret = VT::INT;
+            p_propinfo->class_name = p_type_name.trim_prefix("bitfield::"); // set class_name for object types
+            p_propinfo->usage |= PROPERTY_USAGE_CLASS_IS_BITFIELD;
+        } else if (p_type_name.begins_with("typedarray::"))  {
+            ret = VT::ARRAY;
+            p_propinfo->hint = PROPERTY_HINT_ARRAY_TYPE;
+            p_propinfo->hint_string = p_type_name.trim_prefix("typedarray::");
+        } else if (p_type_name.begins_with("typeddictionary::")) {
+            ret = VT::DICTIONARY;
+            const PackedStringArray splits = p_type_name.trim_prefix("typedarray::").split(";");
+            p_propinfo->hint = PROPERTY_HINT_DICTIONARY_TYPE;
+            p_propinfo->hint_string = p_type_name.trim_prefix("typeddictionary::");   
+        } else if (p_type_name.contains(",")) {
+            ret = VT::OBJECT;
+            p_propinfo->hint = PROPERTY_HINT_RESOURCE_TYPE;
+            p_propinfo->hint_string = p_type_name;
+        } else if (ClassDB::class_exists(p_type_name)) {
+            ret = VT::OBJECT;
+            if (p_type_name == "Resource" || ClassDB::is_parent_class(p_type_name, "Resource")) {
+                p_propinfo->hint = PROPERTY_HINT_RESOURCE_TYPE;
+                p_propinfo->hint_string = p_type_name;
+            } else {
+                p_propinfo->class_name = p_type_name;
+            }
+        } else if (p_type_name == "void") {
+            ret = VT::NIL;
+        } else {
+            CRASH_NOW_MSG("[Api Tool] unknown variant type : " + p_type_name);
+        }
+    }
+    return ret;
+}
 
 // ============================================================================
 // Operator / Constructor / Member
@@ -24,39 +102,39 @@ namespace api_tool {
 // Operator name string -> Variant::Operator conversion
 // ============================================================================
 
-inline godot::Variant::Operator parse_operator_name(const godot::StringName &p_name) {
-    godot::String s(p_name);
+inline Variant::Operator parse_operator_name(const StringName &p_name) {
+    String s(p_name);
     // comparison
-    if (s == "==") return godot::Variant::OP_EQUAL;
-    if (s == "!=") return godot::Variant::OP_NOT_EQUAL;
-    if (s == "<") return godot::Variant::OP_LESS;
-    if (s == "<=") return godot::Variant::OP_LESS_EQUAL;
-    if (s == ">") return godot::Variant::OP_GREATER;
-    if (s == ">=") return godot::Variant::OP_GREATER_EQUAL;
+    if (s == "==") return Variant::OP_EQUAL;
+    if (s == "!=") return Variant::OP_NOT_EQUAL;
+    if (s == "<") return Variant::OP_LESS;
+    if (s == "<=") return Variant::OP_LESS_EQUAL;
+    if (s == ">") return Variant::OP_GREATER;
+    if (s == ">=") return Variant::OP_GREATER_EQUAL;
     // mathematic
-    if (s == "+") return godot::Variant::OP_ADD;
-    if (s == "-") return godot::Variant::OP_SUBTRACT;
-    if (s == "*") return godot::Variant::OP_MULTIPLY;
-    if (s == "/") return godot::Variant::OP_DIVIDE;
-    if (s == "unary-") return godot::Variant::OP_NEGATE;
-    if (s == "unary+") return godot::Variant::OP_POSITIVE;
-    if (s == "%") return godot::Variant::OP_MODULE;
-    if (s == "**") return godot::Variant::OP_POWER;
+    if (s == "+") return Variant::OP_ADD;
+    if (s == "-") return Variant::OP_SUBTRACT;
+    if (s == "*") return Variant::OP_MULTIPLY;
+    if (s == "/") return Variant::OP_DIVIDE;
+    if (s == "unary-") return Variant::OP_NEGATE;
+    if (s == "unary+") return Variant::OP_POSITIVE;
+    if (s == "%") return Variant::OP_MODULE;
+    if (s == "**") return Variant::OP_POWER;
     // bitwise
-    if (s == "<<") return godot::Variant::OP_SHIFT_LEFT;
-    if (s == ">>") return godot::Variant::OP_SHIFT_RIGHT;
-    if (s == "&") return godot::Variant::OP_BIT_AND;
-    if (s == "|") return godot::Variant::OP_BIT_OR;
-    if (s == "^") return godot::Variant::OP_BIT_XOR;
-    if (s == "~") return godot::Variant::OP_BIT_NEGATE;
+    if (s == "<<") return Variant::OP_SHIFT_LEFT;
+    if (s == ">>") return Variant::OP_SHIFT_RIGHT;
+    if (s == "&") return Variant::OP_BIT_AND;
+    if (s == "|") return Variant::OP_BIT_OR;
+    if (s == "^") return Variant::OP_BIT_XOR;
+    if (s == "~") return Variant::OP_BIT_NEGATE;
     // logic
-    if (s == "and") return godot::Variant::OP_AND;
-    if (s == "or") return godot::Variant::OP_OR;
-    if (s == "xor") return godot::Variant::OP_XOR;
-    if (s == "not") return godot::Variant::OP_NOT;
+    if (s == "and") return Variant::OP_AND;
+    if (s == "or") return Variant::OP_OR;
+    if (s == "xor") return Variant::OP_XOR;
+    if (s == "not") return Variant::OP_NOT;
     // containment
-    if (s == "in") return godot::Variant::OP_IN;
-    return godot::Variant::OP_EQUAL; // fallback
+    if (s == "in") return Variant::OP_IN;
+    return Variant::OP_EQUAL; // fallback
 }
 
 // ============================================================================
@@ -72,6 +150,7 @@ static inline Variant dict_get(const Dictionary &d, const String &key, const Var
 }
 
 static inline StringName dict_get_string_name(const Dictionary &d, const String &key) {
+    CRASH_COND_MSG(!dict_has(d, key), "[Api Tool] missing key : " + key);
     return StringName(d[key]);
 }
 
@@ -82,20 +161,21 @@ static inline StringName dict_get_string_name(const Dictionary &d, const String 
 static PropertyInfo parse_property_info(const Dictionary &d) {
     PropertyInfo pi;
     StringName type_str = dict_get_string_name(d, "type");
-    pi.type = parse_variant_type(String(type_str));
-    pi.name = dict_get_string_name(d, "name");
-    if (is_object_type(type_str) || pi.type == Variant::OBJECT) {
-        pi.class_name = type_str;
-    }
+    pi.type = parse_variant_type(String(type_str), &pi);
+    pi.name = dict_has(d, "name") ? StringName(dict_get_string_name(d, "name")) : StringName();
+    // if (is_object_type(type_str) || pi.type == Variant::OBJECT) {
+    //     pi.class_name = type_str.trim_prefix("enum::");
+    // }
     // hint 和 usage 直接在顶层，不在嵌套的 property 对象中
-    pi.hint = dict_has(d, "hint") ? uint32_t(int32_t(d["hint"])) : PROPERTY_HINT_NONE;
-    pi.hint_string = dict_has(d, "hint_string") ? String(d["hint_string"]) : "";
-    pi.usage = dict_has(d, "usage") ? uint32_t(int64_t(d["usage"])) : PROPERTY_USAGE_DEFAULT;
+    // pi.hint = dict_has(d, "hint") ? uint32_t(int32_t(d["hint"])) : PROPERTY_HINT_NONE;
+    // pi.hint_string = dict_has(d, "hint_string") ? String(d["hint_string"]) : "";
+    // pi.usage = dict_has(d, "usage") ? uint32_t(int64_t(d["usage"])) : PROPERTY_USAGE_DEFAULT;
     return pi;
 }
 
-static ApiMethodInfo parse_method(const Dictionary &d) {
-    ApiMethodInfo ami;
+template<typename TApiMethodInfo>
+static TApiMethodInfo parse_method(const Dictionary &d) {
+    TApiMethodInfo ami;
     ami.method.name = dict_get_string_name(d, "name");
 
     // Build flags from JSON booleans
@@ -117,12 +197,19 @@ static ApiMethodInfo parse_method(const Dictionary &d) {
         }
     }
 
-    // return_val
+    // return_val: builtin_classes uses "return_type", classes uses "return_value"
     if (dict_has(d, "return_value")) {
         Dictionary rv = d["return_value"];
         ami.method.return_val = parse_property_info(rv);
         if (dict_has(rv, "meta")) {
             ami.method.return_val_metadata = parse_argument_metadata(dict_get_string_name(rv, "meta"));
+        }
+    } else if (dict_has(d, "return_type")) {
+        // Builtin class methods use "return_type" directly (not nested "return_value")
+        StringName ret_type = dict_get_string_name(d, "return_type");
+        ami.method.return_val.type = parse_variant_type(String(ret_type), &ami.method.return_val);
+        if (dict_has(d, "meta")) {
+            ami.method.return_val_metadata = parse_argument_metadata(dict_get_string_name(d, "meta"));
         }
     }
 
@@ -131,14 +218,32 @@ static ApiMethodInfo parse_method(const Dictionary &d) {
         Array args = d["arguments"];
         ami.method.arguments.reserve(args.size());
         ami.method.arguments_metadata.reserve(args.size());
+        LocalVector<Variant> default_args_tmp;
         for (int i = 0; i < args.size(); i++) {
             Dictionary ad = args[i];
-            ami.method.arguments.push_back(parse_property_info(ad));
+            PropertyInfo pi = parse_property_info(ad);
+            ami.method.arguments.push_back(pi);
             if (dict_has(ad, "meta")) {
                 ami.method.arguments_metadata.push_back(parse_argument_metadata(dict_get_string_name(ad, "meta")));
             } else {
                 ami.method.arguments_metadata.push_back(GDEXTENSION_METHOD_ARGUMENT_METADATA_NONE);
             }
+            // Parse default_value for optional trailing arguments.
+            // JSON stores these as string representations (e.g. "0", "true", "PackedByteArray()").
+            if (dict_has(ad, "default_value")) {
+                String dv_str = String(ad["default_value"]);
+                // For STRING-typed args, the value IS the literal string (JSON unescaped).
+                // For all other types, str_to_var converts Godot's string representation back to Variant.
+                if (pi.type == Variant::STRING) {
+                    default_args_tmp.push_back(Variant(dv_str));
+                } else {
+                    default_args_tmp.push_back(UtilityFunctions::str_to_var(dv_str));
+                }
+            }
+        }
+        // MethodInfo default_arguments contains only the trailing defaults.
+        for (uint32_t i = 0; i < default_args_tmp.size(); i++) {
+            ami.method.default_arguments.push_back(default_args_tmp[i]);
         }
     }
     return ami;
@@ -178,9 +283,11 @@ static ApiSignalInfo parse_signal(const Dictionary &d) {
 static ApiPropertyInfo parse_api_property(const Dictionary &d) {
     ApiPropertyInfo info;
     info.property = parse_property_info(d);
-    info.setter = dict_get_string_name(d, "setter");
-    info.getter = dict_get_string_name(d, "getter");
-    info.index = dict_has(d, "index") ? int32_t(int64_t(d["index"])) : -1;
+    if (!info.property.name.is_empty()) {
+        info.setter = dict_has(d,"setter")? dict_get_string_name(d, "setter") :"";
+        info.getter = dict_has(d,"getter")? dict_get_string_name(d, "getter") : "";
+        info.index = dict_has(d, "index") ? int32_t(int64_t(d["index"])) : -1;
+    }
     return info;
 }
 
@@ -212,6 +319,7 @@ static ApiConstructorInfo parse_constructor(const Dictionary &d) {
 
 static ApiMemberInfo parse_member(const Dictionary &d) {
     ApiMemberInfo info;
+    // builtin_classes members use "name" and "type" fields
     info.name = dict_get_string_name(d, "name");
     info.type = parse_variant_type(String(dict_get_string_name(d, "type")));
     return info;
@@ -228,7 +336,8 @@ Error ApiParser::prepare_output_dirs(const String &p_output_dir) {
         DIR_UTILITY_FUNCTIONS,
         DIR_BUILTIN_CLASSES,
         DIR_CLASSES,
-        DIR_CONSTANTS,
+        DIR_GLOBAL_ENUMS,
+        DIR_GLOBAL_CONSTANTS,
         DIR_SINGLETONS,
         DIR_NATIVE_STRUCTURES,
         // Document subdirectories (sharded by entity type)
@@ -267,7 +376,7 @@ Error ApiParser::parse_and_write_header(const Dictionary &p_root, const String &
     header.version_status = String(dict_get(hdr, "version_status", String()));
     header.version_build = String(dict_get(hdr, "version_build", String()));
     header.version_full_name = String(dict_get(hdr, "version_full_name", String()));
-    header.precision = String(dict_get(hdr, "precision", String()));
+    header.precision = String(dict_get(hdr, "precision", String())) == "double"? RealPrecision::DOUBLE : RealPrecision::SINGLE;
 
     String path = p_output_dir + String("/") + String(FILE_HEADER);
     return ApiStoreWriter::write_header(path, header);
@@ -302,10 +411,10 @@ Error ApiParser::parse_and_write_utility_functions(const Dictionary &p_root, con
         // return_type -> return_val PropertyInfo
         if (dict_has(fd, "return_type")) {
             StringName ret_type = dict_get_string_name(fd, "return_type");
-            func.method.return_val.type = parse_variant_type(String(ret_type));
-            if (is_object_type(ret_type)) {
-                func.method.return_val.class_name = ret_type;
-            }
+            func.method.return_val.type = parse_variant_type(String(ret_type), &func.method.return_val);
+            // if (is_object_type(ret_type)) {
+            //     func.method.return_val.class_name = ret_type.trim_prefix("enum::");
+            // }
         }
 
         if (dict_has(fd, "arguments")) {
@@ -342,6 +451,7 @@ Error ApiParser::parse_and_write_utility_functions(const Dictionary &p_root, con
 // ============================================================================
 // Builtin Types parser
 // ============================================================================
+static bool sort_by_key(const Dictionary&a, const Dictionary&b, const String&key){return a[key] < b[key];};
 
 Error ApiParser::parse_and_write_builtin_classes(const Dictionary &p_root, const String &p_output_dir) {
     ERR_FAIL_COND_V_MSG(!dict_has(p_root, "builtin_classes"), ERR_PARSE_ERROR, "[API Tool] JSON missing 'builtin_classes' section");
@@ -354,8 +464,7 @@ Error ApiParser::parse_and_write_builtin_classes(const Dictionary &p_root, const
     for (int i = 0; i < classes.size(); i++) {
         Dictionary cd = classes[i];
         ApiBuiltinClass bt;
-        bt.name = dict_get_string_name(cd, "name");
-        bt.variant_type = parse_variant_type(String(bt.name));
+        bt.type = parse_variant_type(dict_get_string_name(cd, "name"));
 
         if (dict_has(cd, "indexing_return_type")) {
             bt.has_indexing_return_type = true;
@@ -366,7 +475,7 @@ Error ApiParser::parse_and_write_builtin_classes(const Dictionary &p_root, const
 
         // Build document in parallel
         ApiClassDocument doc;
-        doc.name = String(bt.name);
+        doc.name = Variant::get_type_name(bt.type);
         if (dict_has(cd, "description")) {
             doc.description = String(cd["description"]);
         }
@@ -403,7 +512,7 @@ Error ApiParser::parse_and_write_builtin_classes(const Dictionary &p_root, const
                 String value_str = dict_has(c, "value") ? String(c["value"]) : "";
                 ci.value = UtilityFunctions::str_to_var(value_str);
                 CRASH_COND_MSG(ci.value.get_type() != ci.type, String("Parse error, Invalid var string: ") + value_str);
-                CRASH_COND_MSG(UtilityFunctions::var_to_str(ci.value) == value_str, vformat("Parse error: '%s' VS '%s'", value_str, UtilityFunctions::var_to_str(ci.value)));
+                CRASH_COND_MSG(UtilityFunctions::var_to_str(ci.value) != value_str, vformat("Parse error: '%s' VS '%s'", value_str, UtilityFunctions::var_to_str(ci.value)));
                 bt.constants.push_back(ci);
                 ApiConstantDocument cdoc;
                 cdoc.name = String(ci.name);
@@ -446,7 +555,9 @@ Error ApiParser::parse_and_write_builtin_classes(const Dictionary &p_root, const
             doc.methods.reserve(methods.size());
             for (int j = 0; j < methods.size(); j++) {
                 Dictionary md = methods[j];
-                bt.methods.push_back(parse_method(md));
+                ApiBuiltInMethod mbi = parse_method<ApiBuiltInMethod>(md);
+                mbi.set_variant_type(bt.type); // Propagate variant_type for lazy loading
+                bt.methods.push_back(mbi);
                 ApiMethodDocument mdoc;
                 mdoc.name = String(dict_get_string_name(md, "name"));
                 if (dict_has(md, "description")) {
@@ -476,6 +587,7 @@ Error ApiParser::parse_and_write_builtin_classes(const Dictionary &p_root, const
             Array constructors = cd["constructors"];
             bt.constructors.reserve(constructors.size());
             doc.constructors.reserve(constructors.size());
+            constructors.sort_custom(callable_mp_static(sort_by_key).bind("index"));
             for (int j = 0; j < constructors.size(); j++) {
                 Dictionary ctor_d = constructors[j];
                 bt.constructors.push_back(parse_constructor(ctor_d));
@@ -489,15 +601,15 @@ Error ApiParser::parse_and_write_builtin_classes(const Dictionary &p_root, const
         }
 
         // Write main data file
-        String path = dir + String("/") + String(bt.name) + String(FILE_EXT_DATA);
+        String path = dir + String("/") + Variant::get_type_name(bt.type) + String(FILE_EXT_DATA);
         Error err = ApiStoreWriter::write_builtin_class(path, bt);
         if (err != OK) {
-            ERR_PRINT("[API Tool] Failed to write builtin type: " + String(bt.name));
+            ERR_PRINT("[API Tool] Failed to write builtin type: " + Variant::get_type_name(bt.type));
             overall = err;
         }
 
         // Write document file
-        String doc_path = doc_dir + String("/") + String(bt.name) + String(FILE_EXT_DOC);
+        String doc_path = doc_dir + String("/") + Variant::get_type_name(bt.type) + String(FILE_EXT_DOC);
         ApiStoreWriter::write_document(doc_path, doc);
     }
 
@@ -520,7 +632,7 @@ Error ApiParser::parse_and_write_classes(const Dictionary &p_root, const String 
         Dictionary cd = classes[i];
         ApiClass cls;
         cls.name = dict_get_string_name(cd, "name");
-        cls.inherits = dict_get_string_name(cd, "inherits");
+        cls.inherits = dict_has(cd, "inherits") ? dict_get_string_name(cd, "inherits") : "";
         cls.api_type = dict_get_string_name(cd, "api_type");
         cls.is_refcounted = dict_has(cd, "is_refcounted") ? bool(cd["is_refcounted"]) : false;
         cls.is_instantiable = dict_has(cd, "is_instantiable") ? bool(cd["is_instantiable"]) : true;
@@ -541,7 +653,7 @@ Error ApiParser::parse_and_write_classes(const Dictionary &p_root, const String 
             doc.methods.reserve(methods.size());
             for (int j = 0; j < methods.size(); j++) {
                 Dictionary md = methods[j];
-                cls.methods.push_back(parse_method(md));
+                cls.methods.push_back(parse_method<ApiClassMethod>(md));
                 ApiMethodDocument mdoc;
                 mdoc.name = String(dict_get_string_name(md, "name"));
                 if (dict_has(md, "description")) {
@@ -652,7 +764,7 @@ Error ApiParser::parse_and_write_global_enums(const Dictionary &p_root, const St
     ERR_FAIL_COND_V_MSG(!dict_has(p_root, "global_enums"), ERR_PARSE_ERROR, "[API Tool] JSON missing 'global_enums' section");
 
     Array enums = p_root["global_enums"];
-    String dir = p_output_dir + String("/") + String(DIR_CONSTANTS);
+    String dir = p_output_dir + String("/") + String(DIR_GLOBAL_ENUMS);
     String doc_dir = p_output_dir + String("/") + String(DIR_DOC_GLOBAL_ENUMS);
     Error overall = OK;
 
@@ -699,7 +811,7 @@ Error ApiParser::parse_and_write_global_constants(const Dictionary &p_root, cons
     ERR_FAIL_COND_V_MSG(!dict_has(p_root, "global_constants"), ERR_PARSE_ERROR, "[API Tool] JSON missing 'global_constants' section");
 
     Array constants = p_root["global_constants"];
-    String dir = p_output_dir + String("/") + String(DIR_CONSTANTS);
+    String dir = p_output_dir + String("/") + String(DIR_GLOBAL_CONSTANTS);
     String doc_dir = p_output_dir + String("/") + String(DIR_DOC_GLOBAL_CONSTANTS);
     Error overall = OK;
 

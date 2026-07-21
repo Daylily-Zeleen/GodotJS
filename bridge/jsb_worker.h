@@ -18,7 +18,7 @@ namespace jsb
 
     typedef internal::Index32 WorkerID;
 
-    typedef std::mutex WorkerLock;
+    typedef std::recursive_mutex WorkerLock;
     class Environment;
     class WorkerImpl;
     typedef std::shared_ptr<WorkerImpl> WorkerImplPtr;

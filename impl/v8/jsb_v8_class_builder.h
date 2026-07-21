@@ -1,6 +1,7 @@
 #ifndef GODOTJS_V8_CLASS_BUILDER_H
 #define GODOTJS_V8_CLASS_BUILDER_H
 
+#include "jsb_v8_helper.h"
 #include "jsb_v8_pch.h"
 #include "jsb_v8_class.h"
 
@@ -54,7 +55,7 @@ namespace jsb::impl
             {
                 jsb_check(builder_->state_ == State::Building);
                 v8::HandleScope handle_scope(builder_->isolate_);
-                const v8::Local<v8::Name> key = Helper::new_string(builder_->isolate_, name);
+                const v8::Local<v8::Name> key = jsb::impl::Helper::new_string(builder_->isolate_, name);
                 const v8::Local<v8::Value> value = impl_private::Data<int64_t>::New(builder_->isolate_, data);
                 const v8::Local<v8::Context> context = builder_->isolate_->GetCurrentContext();
 

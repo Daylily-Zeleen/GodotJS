@@ -384,7 +384,7 @@ namespace jsb
         // return nullptr if no register for `p_type_name`
         NativeClassInfoPtr expose_class(const StringName& p_type_name, NativeClassID* r_class_id = nullptr);
 
-        NativeClassInfoPtr expose_godot_object_class(const ClassDB::ClassInfo* p_class_info, NativeClassID* r_class_id = nullptr);
+        NativeClassInfoPtr expose_godot_object_class(const godot::StringName& p_class_name, NativeClassID* r_class_id = nullptr);
 
         NativeClassInfoPtr expose_godot_primitive_class(const Variant::Type p_type, NativeClassID* r_class_id = nullptr)
         {

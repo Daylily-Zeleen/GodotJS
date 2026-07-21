@@ -2,6 +2,7 @@
 #define GODOTJS_VARIANT_INFO_H
 #include "jsb_macros.h"
 #include "jsb_variant_util.h"
+#include "api_tool/api_tool_types.h"
 
 namespace jsb::internal
 {
@@ -22,19 +23,18 @@ namespace jsb::internal
 
     struct FBuiltinMethodInfo : FMethodInfoBase
     {
-        ValidatedBuiltInMethod builtin_func;
-        Vector<Variant> default_arguments;
+        const api_tool::ApiBuiltInMethod* method_info = nullptr;
 
         jsb_force_inline bool check_argc(int p_argc) const
         {
-            return VariantUtil::check_argc(is_vararg, p_argc, default_arguments.size(), argument_types.size());
+            return VariantUtil::check_argc(is_vararg, p_argc, method_info->method.default_arguments.size(), argument_types.size());
         }
 
     };
 
     struct FUtilityMethodInfo : FMethodInfoBase
     {
-        ValidatedUtilityFunction utility_func;
+        const api_tool::ApiUtilityFunction* utility_func = nullptr;
 
         jsb_force_inline bool check_argc(int p_argc) const
         {
@@ -42,16 +42,14 @@ namespace jsb::internal
         }
     };
 
-    struct FGetSetInfo
+    struct FPrimitiveMemberInfo
     {
-        ValidatedSetter setter_func;
-        ValidatedGetter getter_func;
-        Variant::Type type;
+        const api_tool::ApiMemberInfo* member_info = nullptr;
     };
 
     struct FConstructorVariantInfo
     {
-        ValidatedConstructor ctor_func;
+        const api_tool::ApiConstructorInfo* constructor_info = nullptr;
 
         // argument types are cached here for better performance at runtime.
         Vector<Variant::Type> argument_types;
@@ -66,10 +64,8 @@ namespace jsb::internal
 
     struct FPropertyInfo2
     {
-        MethodBind* getter_func;
-        MethodBind* setter_func;
-
-        // extra parameter at the first position for getter/setter (getter2/setter2)
+        const api_tool::ApiClassMethod* getter_func;
+        const api_tool::ApiClassMethod* setter_func;
         int index;
     };
 
@@ -86,10 +82,10 @@ namespace jsb::internal
         Vector<FBuiltinMethodInfo> methods;
 
         // properties of Variant types
-        Vector<FGetSetInfo> getsets;
+        Vector<FPrimitiveMemberInfo> primitive_members;
 
         // for godot properties which have an implicit (hidden) parameter for getter/setter calls
-        Vector<FPropertyInfo2> properties2;
+        Vector<FPropertyInfo2> object_properties;
 
     };
 }

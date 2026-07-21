@@ -1,5 +1,7 @@
 #include "jsb_environment.h"
 
+#include "api_tool/api_tool.h"
+
 #include "jsb_bridge_module_loader.h"
 #include "jsb_compat.h"
 #include "jsb_engine_compat.h"
@@ -24,8 +26,6 @@
 #include "../jsb_project_preset.h"
 #include "../weaver/jsb_script_language.h"
 #include "../weaver/jsb_script_instance.h"
-#include "../gen/core_constants.gen.h"
-#include "../gen/utility_functions_ext.gen.h"
 
 //TODO remove this
 #include "../weaver/jsb_script.h"
@@ -62,7 +62,7 @@ namespace jsb
         std::vector<std::shared_ptr<Environment>> get_list()
         {
             std::vector<std::shared_ptr<Environment>> rval;
-            std::lock_guard<std::mutex> lock(mutex_);
+            std::lock_guard lock(mutex_);
             for (void* ptr : all_runtimes_)
             {
                 //TODO check if it's not removed from `all_runtimes_` but being destructed already (consider remove it from the list immediately on destructor called)
@@ -76,7 +76,7 @@ namespace jsb
         std::shared_ptr<Environment> access(void* p_runtime)
         {
             std::shared_ptr<Environment> rval;
-            std::lock_guard<std::mutex> lock(mutex_);
+            std::lock_guard lock(mutex_);
             if (all_runtimes_.has(p_runtime))
             {
                 //TODO check if it's not removed from `all_runtimes_` but being destructed already (consider remove it from the list immediately on destructor called)
@@ -90,7 +90,7 @@ namespace jsb
         std::shared_ptr<Environment> access()
         {
             std::shared_ptr<Environment> rval;
-            std::lock_guard<std::mutex> lock(mutex_);
+            std::lock_guard lock(mutex_);
             for (void* ptr : all_runtimes_)
             {
                 //TODO check if it's not removed from `all_runtimes_` but being destructed already (consider remove it from the list immediately on destructor called)
@@ -108,7 +108,7 @@ namespace jsb
         Environment* internal_access(void* p_runtime)
         {
             Environment* rval = nullptr;
-            std::lock_guard<std::mutex> lock(mutex_);
+            std::lock_guard lock(mutex_);
             if (all_runtimes_.has(p_runtime))
             {
                 rval = (Environment*) p_runtime;
@@ -118,21 +118,21 @@ namespace jsb
 
         bool exists(void* p_runtime) const
         {
-            std::lock_guard<std::mutex> lock(mutex_);
+            std::lock_guard lock(mutex_);
             const bool rval = all_runtimes_.has(p_runtime);
             return rval;
         }
 
         void add(void* p_runtime)
         {
-            std::lock_guard<std::mutex> lock(mutex_);
+            std::lock_guard lock(mutex_);
             jsb_check(!all_runtimes_.has(p_runtime));
             all_runtimes_.insert(p_runtime);
         }
 
         void remove(void* p_runtime)
         {
-            std::lock_guard<std::mutex> lock(mutex_);
+            std::lock_guard lock(mutex_);
             jsb_check(all_runtimes_.has(p_runtime));
             all_runtimes_.erase(p_runtime);
         }
@@ -144,7 +144,7 @@ namespace jsb
         }
 
     private:
-        mutable std::mutex mutex_;
+        mutable std::recursive_mutex mutex_;
         HashSet<void*> all_runtimes_;
     };
 
@@ -334,9 +334,7 @@ namespace jsb
 
                     PackedStringArray reserved_words = GodotJSScriptLanguage::get_singleton()->_get_reserved_words();
 
-                    List<StringName> utility_func_list;
-                    VariantExt::get_utility_function_list(&utility_func_list);
-                    for (const StringName& func_name : utility_func_list) {
+                    for (const StringName& func_name : api_tool::list_utility_functions()) {
                         StringName exposed_name = func_name;
 
                         if (reserved_words.find(exposed_name) >= 0)
@@ -350,20 +348,18 @@ namespace jsb
                         }
                     }
 
-                    const int constant_count = CoreConstants::get_global_constant_count();
-                    for (int index = 0; index < constant_count; ++index)
+                    for (const StringName& constant_name : api_tool::list_global_constants())
                     {
-                        const StringName enum_name = CoreConstants::get_global_constant_enum(index);
-                        String exposed_name = internal::NamingUtil::get_class_name(enum_name);
+                        String exposed_name = internal::NamingUtil::get_class_name(constant_name);
 
                         if (reserved_words.find(exposed_name) >= 0)
                         {
                             exposed_name = internal::NamingUtil::get_member_name("godot_" + exposed_name);
                         }
 
-                        if (exposed_name != enum_name)
+                        if (exposed_name != constant_name)
                         {
-                            names.add_replacement(enum_name, exposed_name);
+                            names.add_replacement(constant_name, exposed_name);
                         }
                     }
                 }
@@ -1614,15 +1610,15 @@ namespace jsb
         }
     }
 
-    NativeClassInfoPtr Environment::expose_godot_object_class(const ClassDB::ClassInfo* p_class_info, NativeClassID* r_class_id)
+    NativeClassInfoPtr Environment::expose_godot_object_class(const godot::StringName& p_class_name, NativeClassID* r_class_id)
     {
-        if (!p_class_info)
+        if (p_class_name.is_empty())
         {
             if (r_class_id) *r_class_id = {};
             return nullptr;
         }
 
-        String class_name = internal::NamingUtil::get_class_name(p_class_info->name);
+        String class_name = internal::NamingUtil::get_class_name(p_class_name);
 
         if (const NativeClassID* it = godot_classes_index_.getptr(class_name))
         {
@@ -1635,7 +1631,7 @@ namespace jsb
         }
 
         NativeClassID class_id;
-        const v8::Local<v8::Function> class_ = ObjectReflectBindingUtil::reflect_bind(this, p_class_info, &class_id)->clazz.Get(isolate_);
+        const v8::Local<v8::Function> class_ = ObjectReflectBindingUtil::reflect_bind(this, p_class_name, &class_id)->clazz.Get(isolate_);
         jsb_check(class_id);
         if (r_class_id) *r_class_id = class_id;
         on_class_post_bind(class_name, class_);
@@ -1871,13 +1867,13 @@ namespace jsb
 
     void Environment::evaluate_default_values(ScriptClassInfo& p_class_info)
     {
-        if (p_class_info.flags & ScriptClassFlags::_Evaluated)
+        if (p_class_info.flags.has_flag(ScriptClassFlags::_Evaluated))
         {
             return;
         }
 
         check_internal_state();
-        p_class_info.flags = (ScriptClassFlags::Type) (p_class_info.flags | ScriptClassFlags::_Evaluated);
+        p_class_info.flags.set_flag(ScriptClassFlags::_Evaluated);
 
         v8::Isolate* isolate = get_isolate();
         v8::Isolate::Scope isolate_scope(isolate);
@@ -2087,38 +2083,39 @@ namespace jsb
         const v8::Local<v8::Context> context = this->get_context();
         v8::Context::Scope context_scope(context);
 
-        ScriptClassInfoPtr script_class_info = script_classes_.get_value_scoped(p_script_class_id);
-        const internal::TypeGen<StringName, v8::Global<v8::Function>>::UnorderedMapIt it = script_class_info->method_cache.find(p_method);
         v8::Local<v8::Function> method_func;
-        if (it == script_class_info->method_cache.end())
         {
-            const v8::Local<v8::Object> class_obj = script_class_info->js_class.Get(isolate);
-            const v8::Local<v8::Value> prototype = class_obj->Get(context, jsb_name(this, prototype)).ToLocalChecked();
-            jsb_check(prototype->IsObject());
-            v8::Local<v8::Value> method;
-            String exposed_name = p_method;
+            ScriptClassInfoPtr script_class_info = script_classes_.get_value_scoped(p_script_class_id);
+            const internal::TypeGen<StringName, v8::Global<v8::Function>>::UnorderedMapIt it = script_class_info->method_cache.find(p_method);
+            if (it == script_class_info->method_cache.end())
+            {
+                const v8::Local<v8::Object> class_obj = script_class_info->js_class.Get(isolate);
+                const v8::Local<v8::Value> prototype = class_obj->Get(context, jsb_name(this, prototype)).ToLocalChecked();
+                jsb_check(prototype->IsObject());
+                v8::Local<v8::Value> method;
+                String exposed_name = p_method;
 
-            if (exposed_name.begins_with("_"))
-            {
-                exposed_name = internal::NamingUtil::get_member_name(exposed_name);
-            }
+                if (exposed_name.begins_with("_"))
+                {
+                    exposed_name = internal::NamingUtil::get_member_name(exposed_name);
+                }
 
-            if (prototype.As<v8::Object>()->Get(context, this->get_string_value(exposed_name)).ToLocal(&method) && method->IsFunction())
-            {
-                method_func = method.As<v8::Function>();
-                script_class_info->method_cache[p_method] = v8::Global<v8::Function>(isolate_, method_func);
+                if (prototype.As<v8::Object>()->Get(context, this->get_string_value(exposed_name)).ToLocal(&method) && method->IsFunction())
+                {
+                    method_func = method.As<v8::Function>();
+                    script_class_info->method_cache[p_method] = v8::Global<v8::Function>(isolate_, method_func);
+                }
+                else
+                {
+                    script_class_info->method_cache[p_method] = v8::Global<v8::Function>();
+                    JSB_LOG(Verbose, "method not found %s.%s (%s)", script_class_info->js_class_name, exposed_name, script_class_info->module_id);
+                }
             }
-            else
+            else if (!it->second.IsEmpty())
             {
-                script_class_info->method_cache[p_method] = v8::Global<v8::Function>();
-                JSB_LOG(Verbose, "method not found %s.%s (%s)", script_class_info->js_class_name, exposed_name, script_class_info->module_id);
+                method_func = it->second.Get(isolate);
             }
         }
-        else
-        {
-            if (!it->second.IsEmpty()) method_func = it->second.Get(isolate);
-        }
-        script_class_info = nullptr;
 
         v8::Local<v8::Object> self;
         if (!this->try_get_object(p_object_id, self))

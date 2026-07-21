@@ -1,8 +1,11 @@
 #ifndef GODOTJS_BRIDGE_HELPER_H
 #define GODOTJS_BRIDGE_HELPER_H
-#include "gen/core_constants.gen.h"
+
 #include "jsb_bridge_pch.h"
 #include "jsb_type_convert.h"
+
+#include "api_tool/api_tool.h"
+#include "api_tool/api_tool_types.h"
 
 namespace jsb
 {
@@ -27,17 +30,19 @@ namespace jsb
 
         static v8::Local<v8::Object> to_global_enum(v8::Isolate* isolate, const v8::Local<v8::Context>& context, const StringName& name)
         {
-            HashMap<StringName, int64_t> enum_values;
-            CoreConstants::get_enum_values(name, &enum_values);
-            return to_global_enum(isolate, context, enum_values);
+            const auto api_enum_info = api_tool::find_global_enum(name);
+            ERR_FAIL_NULL_V_MSG(api_enum_info, v8::Object::New(isolate), "Can't find global enum: " + name);
+            return to_global_enum(isolate, context, api_enum_info);
         }
 
-        static v8::Local<v8::Object> to_global_enum(v8::Isolate* isolate, const v8::Local<v8::Context>& context, const HashMap<StringName, int64_t>& enum_values)
+        static v8::Local<v8::Object> to_global_enum(v8::Isolate* isolate, const v8::Local<v8::Context>& context, const api_tool::ApiEnumInfo *api_enum_info)
         {
+            jsb_check(api_enum_info);
             const v8::Local<v8::Object> enumeration = v8::Object::New(isolate);
-            for (const KeyValue<StringName, int64_t>& kv : enum_values)
+
+            for (const auto& kv : api_enum_info->values)
             {
-                const v8::Local<v8::String> name = impl::Helper::new_string(isolate, internal::NamingUtil::get_enum_value_name(kv.key));
+                const v8::Local<v8::String> name = impl::Helper::new_string(isolate, internal::NamingUtil::get_enum_value_name(kv.name));
                 const v8::Local<v8::Value> value = impl::Helper::new_integer(isolate, kv.value);
                 enumeration->Set(context, name, value).Check();
                 // represents the value back to string for convenient uses, such as MyColor[MyColor.White] => 'White'

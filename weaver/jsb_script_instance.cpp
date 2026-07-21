@@ -173,8 +173,8 @@ static GDExtensionScriptInstanceInfo3 script_instance_info {
         const StringName& method = *reinterpret_cast<const StringName *>(p_method);
         const Variant** args = (const Variant**)p_args;
         Variant& ret = *reinterpret_cast<Variant*>(r_return);
-        GDExtensionCallError& err = *r_error;
-        ret = script_instance->callp(method, args, (int)p_argument_count, err);
+        *r_error = {}; // 进行 0 初始化，GDExtensionCallError 的字段没有定义初始值，所有局部 GDExtensionCallError 都需要初始化，防止出现垃圾值。
+        ret = script_instance->callp(method, args, (int)p_argument_count, *r_error);
     }},
     .notification_func {[] (GDExtensionScriptInstanceDataPtr p_instance, int32_t p_what, GDExtensionBool p_reversed) {
         GodotJSScriptInstanceBase* script_instance = (GodotJSScriptInstanceBase*)p_instance;
@@ -210,13 +210,17 @@ static GDExtensionScriptInstanceInfo3 script_instance_info {
 };
 
 ScriptInstance* ScriptInstance::get_script_instance(Object* p_object) {
-    return (GodotJSScriptInstanceBase *)godot::gdextension_interface::object_get_script_instance(p_object, GodotJSScriptLanguage::get_singleton());
+    void *obj_ptr {nullptr};
+    PtrToArg<Object*>::encode(p_object, &obj_ptr);
+    return (GodotJSScriptInstanceBase *)godot::gdextension_interface::object_get_script_instance(obj_ptr, GodotJSScriptLanguage::get_singleton());
 }
 
 void ScriptInstance::set_script_instance(Object *p_object, ScriptInstance *p_instance)
 {
     // TODO: 接口类型错误 DataPtr: Ptr!!!!!!!!!!!!!
-    godot::gdextension_interface::object_set_script_instance(p_object, p_instance ? p_instance->extension_instance_ptr : nullptr);
+    void *obj_ptr {nullptr};
+    PtrToArg<Object*>::encode(p_object, &obj_ptr);
+    godot::gdextension_interface::object_set_script_instance(obj_ptr, p_instance ? p_instance->extension_instance_ptr : nullptr);
 }
 
 ScriptInstance::ScriptInstance(const Ref<GodotJSScript> &p_script, Object* p_owner, GDExtensionScriptInstancePtr p_extension_instance_ptr):
@@ -250,7 +254,7 @@ GodotJSScriptInstanceBase::~GodotJSScriptInstanceBase()
     {
         jsb_check(script_->_get_language());
         const GodotJSScriptLanguage* lang = (GodotJSScriptLanguage*) script_->_get_language();
-        std::lock_guard<std::mutex> lock(lang->mutex_);
+        std::lock_guard lock(lang->mutex_);
         script_->instances_.erase(owner_);
     }
 }
@@ -289,7 +293,7 @@ void GodotJSScriptInstanceBase::get_property_state(ScriptInstancePropertyState &
 #ifdef TOOLS_ENABLED
 // ====== PlaceholderScriptInstance =====
 PlaceholderScriptInstance::PlaceholderScriptInstance(const Ref<GodotJSScript> &p_script, Object* p_owner):
-ScriptInstance(p_script, p_owner,::godot::gdextension_interface::placeholder_script_instance_create(GodotJSScriptLanguage::get_singleton(), p_script.ptr(), p_owner))
+ScriptInstance(p_script, p_owner,::godot::gdextension_interface::placeholder_script_instance_create(GodotJSScriptLanguage::get_singleton(), p_script->_owner, p_owner->_owner))
 {
 }
 
@@ -371,7 +375,7 @@ bool GodotJSScriptInstance::set(const StringName& p_name, const Variant& p_value
             Variant name = p_name;
             const Variant *args[2] = { &name, &p_value };
 
-            GDExtensionCallError err;
+            GDExtensionCallError err {};
             Variant ret = env_->call_script_method(class_id_, object_id_, jsb_string_name(_set), (const Variant **)args, 2, err);
             if (err.error == GDEXTENSION_CALL_OK && ret.get_type() == Variant::BOOL && ret.operator bool()) {
                 return true;
@@ -434,7 +438,7 @@ bool GodotJSScriptInstance::get(const StringName& p_name, Variant& r_ret) const
             Variant name = p_name;
             const Variant *args[1] = { &name };
 
-            GDExtensionCallError err;
+            GDExtensionCallError err {};
             Variant ret = env_->call_script_method(class_id_, object_id_, jsb_string_name(_get), (const Variant **)args, 1, err);
             if (err.error == GDEXTENSION_CALL_OK && ret.get_type() != Variant::NIL)
             {
@@ -458,7 +462,7 @@ void GodotJSScriptInstance::get_property_list(LocalVector<GDExtensionPropertyInf
     {
         if (const auto& it = sptr->script_class_info_.methods.find(jsb_string_name(_get_property_list)); it)
         {
-            GDExtensionCallError err;
+            GDExtensionCallError err {};
             Variant ret = env_->call_script_method(class_id_, object_id_, jsb_string_name(_get_property_list), nullptr, 0, err);
             if (err.error == GDEXTENSION_CALL_OK && ret.get_type() != Variant::NIL)
             {
@@ -532,7 +536,7 @@ void GodotJSScriptInstance::validate_property(PropertyInfo& p_property) const
             Variant property = (Dictionary)p_property;
             const Variant *args[1] = { &property };
 
-            GDExtensionCallError err;
+            GDExtensionCallError err {};
             Variant ret = env_->call_script_method(class_id_, object_id_, jsb_string_name(_validate_property), (const Variant **)args, 1, err);
             if (err.error == GDEXTENSION_CALL_OK && ret.get_type() != Variant::NIL)
             {
@@ -554,7 +558,7 @@ bool GodotJSScriptInstance::property_can_revert(const StringName& p_name) const
             Variant name = p_name;
             const Variant *args[1] = { &name };
 
-            GDExtensionCallError err;
+            GDExtensionCallError err {};
             Variant ret = env_->call_script_method(class_id_, object_id_, jsb_string_name(_property_can_revert), args, 1, err);
             if (err.error == GDEXTENSION_CALL_OK && ret.get_type() == Variant::BOOL && ret.operator bool()) {
                 return true;
@@ -577,7 +581,7 @@ bool GodotJSScriptInstance::property_get_revert(const StringName& p_name, Varian
             Variant name = p_name;
             const Variant *args[1] = { &name };
 
-            GDExtensionCallError err;
+            GDExtensionCallError err {};
             Variant ret = env_->call_script_method(class_id_, object_id_, jsb_string_name(_property_get_revert), args, 1, err);
             if (err.error == GDEXTENSION_CALL_OK && ret.get_type() == Variant::BOOL && ret.operator bool()) {
                 r_ret = ret;

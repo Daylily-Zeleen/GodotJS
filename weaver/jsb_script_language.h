@@ -58,7 +58,7 @@ using ScriptInstancePropertyState = List<Pair<StringName, Variant>>; // TODO: �
 
 class GodotJSScriptLanguage : public ScriptLanguageExtension
 {
-    // GDCLASS(GodotJSScriptLanguage, ScriptLanguageExtension) // TODO: 待确认，应该不需要注册于暴露
+    GDCLASS(GodotJSScriptLanguage, ScriptLanguageExtension)
 
 private:
     friend class GodotJSScript;
@@ -100,14 +100,14 @@ private:
 
     static GodotJSScriptLanguage* singleton_;
 
-    mutable std::mutex mutex_;
+    mutable std::recursive_mutex mutex_;
     SelfList<GodotJSScript>::List script_list_;
 
     bool once_inited_ = false;
     uint64_t last_ticks_ = 0;
     std::shared_ptr<jsb::Environment> environment_;
 
-    mutable std::mutex shadow_mutex_;
+    mutable std::recursive_mutex shadow_mutex_;
     std::vector<ShadowEnvironment> shadow_environments_;
 
 #if JSB_DEBUG
@@ -195,13 +195,13 @@ public:
 #endif
 
     virtual bool _is_using_templates() override { return true; }
-#ifndef DISABLE_DEPRECATED
-    virtual bool _has_named_classes() const override { return false; }
-#endif // DISABLE_DEPRECATED
     virtual bool _supports_builtin_mode() const override { return false; }
 
     virtual int32_t _find_function(const String& p_function, const String& p_code) const override { return -1; } // TODO
-    virtual String _make_function(const String& p_class_name, const String& p_function_name, const PackedStringArray& p_function_args) const override { return ""; } // TODO
+
+    // Godot 的函数添加只能在文件末尾，不符合类的定义范围有前后标记的语言，该功能不实现。
+	virtual bool _can_make_function() const override { return false; }
+    virtual String _make_function(const String& p_class_name, const String& p_function_name, const PackedStringArray& p_function_args) const override { return ""; }
 
     virtual String _auto_indent_code(const String& p_code, int32_t p_from_line, int32_t p_to_line) const override { return p_code; } // TODO
     virtual void _add_global_constant(const StringName& p_name, const Variant& p_value) override {} // TODO
@@ -234,6 +234,18 @@ public:
     virtual bool _handles_global_class_type(const String& p_type) const override;
     virtual Dictionary _get_global_class_name(const String& p_path) const override;
 
+    // 用户自行设置外部文本编辑器即可。
+	virtual Error _open_in_external_editor(const Ref<Script> &p_script, int32_t p_line, int32_t p_column) override { return OK; }
+	virtual bool _overrides_external_editor() override { return false; }
+
+    // 
+    virtual bool _can_inherit_from_file() const override { return false; } // js 类不能直接继承文件路径
+	virtual String _validate_path(const String &p_path) const override { return ""; } // TODO: 返回指定路径文件的错误信息（脚本创建对话框处使用）
+
+    // 暂无计划实现编辑器内编写 TS/JS 脚本
+	virtual Dictionary _complete_code(const String &p_code, const String &p_path, Object *p_owner) const override { return {}; }
+	virtual Dictionary _lookup_code(const String &p_code, const String &p_symbol, const String &p_path, Object *p_owner) const override { return {}; }
+
 #pragma endregion
 
 private:
@@ -241,6 +253,9 @@ private:
     void destroy_shadow_environment(const std::shared_ptr<jsb::Environment>& p_env);
 
     void reload_scripts_internal(const Array& p_scripts, bool p_soft_reload);
+
+protected:
+    static void _bind_methods();
 };
 
 #endif

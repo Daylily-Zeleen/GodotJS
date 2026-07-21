@@ -183,6 +183,22 @@ namespace jsb
     // exchange internal javascript class (object) information.
     struct StatelessScriptClassInfo
     {
+    private:
+        template <typename T>
+        class Flags {
+            using UnderlyingType = std::underlying_type<T>::type;
+            UnderlyingType value = 0;
+
+        public:
+            _FORCE_INLINE_ void set_flag(T p_flag) { value |= p_flag; }
+            _FORCE_INLINE_ bool has_flag(T p_flag) const { return value & p_flag; }
+            _FORCE_INLINE_ void clear_flag(T p_flag) { value &= ~p_flag; }
+            _FORCE_INLINE_ Flags(T p_value) { value = p_value; }
+            _FORCE_INLINE_ operator UnderlyingType() const { return value; }
+            _FORCE_INLINE_ operator Variant() const { return value; }
+        };
+
+    public:
         // name of the owner module
         StringName module_id;
 
@@ -208,13 +224,13 @@ namespace jsb
         HashMap<StringName, ScriptSignalInfo> signals;
         HashMap<StringName, ScriptPropertyInfo> properties;
 
-        ScriptClassFlags::Type flags = ScriptClassFlags::None;
+        Flags<ScriptClassFlags::Type> flags { ScriptClassFlags::None };
 
         //TODO whether the internal class object alive or not
         jsb_force_inline bool is_valid() const { return true; }
 
-        jsb_force_inline bool is_tool() const { return flags & ScriptClassFlags::Tool; }
-        jsb_force_inline bool is_abstract() const { return flags & ScriptClassFlags::Abstract; }
+        jsb_force_inline bool is_tool() const { return flags.has_flag(ScriptClassFlags::Tool); }
+        jsb_force_inline bool is_abstract() const { return flags.has_flag(ScriptClassFlags::Abstract); }
     };
 
     struct ScriptClassInfo : StatelessScriptClassInfo

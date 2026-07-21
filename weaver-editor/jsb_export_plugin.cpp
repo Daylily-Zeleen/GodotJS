@@ -274,3 +274,5 @@ bool GodotJSExportPlugin::_supports_platform(const Ref<EditorExportPlatform>& p_
     JSB_EXPORTER_LOG(VeryVerbose, "GodotJSExportPlugin::_supports_platform( %s )", p_export_platform.is_valid() ? p_export_platform->get_class() : String("null"));
     return true;
 }
+
+void GodotJSExportPlugin::_bind_methods() {}

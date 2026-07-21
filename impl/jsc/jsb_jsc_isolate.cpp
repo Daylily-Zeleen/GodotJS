@@ -266,7 +266,7 @@ function(key, value, getter, setter) {
         Vector<jsb::impl::InternalData*> finalize_batch;
 
         {
-            std::lock_guard<std::mutex> lock(pending_finalize_mutex_);
+            std::lock_guard lock(pending_finalize_mutex_);
             finalize_batch = pending_finalize_;
             pending_finalize_.clear();
         }

@@ -46,11 +46,9 @@ void EditorProgressDialog::update_internal(const String &p_task_name, const Stri
 		return;
 	}
 
-	if (EditorInterface *ei = EditorInterface::get_singleton()) {
-		Vector2i min_size = main->get_combined_minimum_size();
-		min_size.x = Math::max(min_size.x, (int32_t)(500 * EDSCALE));
-		ei->popup_dialog_centered(this, min_size);
-	}
+	Vector2i min_size = main->get_combined_minimum_size();
+	min_size.x = Math::max(min_size.x, (int32_t)(500 * EDSCALE));
+	popup_centered(min_size);
 }
 
 void EditorProgressDialog::add(const String &p_task_name, int p_total) {

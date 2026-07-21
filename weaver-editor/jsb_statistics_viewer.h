@@ -10,8 +10,6 @@
 
 class GodotJSStatisticsViewer : public VBoxContainer
 {
-	GDCLASS(GodotJSStatisticsViewer, VBoxContainer)
-
 private:
 	Tree* tree;
 	TreeItem* tree_root;

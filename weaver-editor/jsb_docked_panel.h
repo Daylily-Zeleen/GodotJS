@@ -8,7 +8,6 @@
 
 class GodotJSDockedPanel : public EditorDock
 {
-	GDCLASS(GodotJSDockedPanel, EditorDock)
 
 private:
 	TabContainer* tabs;

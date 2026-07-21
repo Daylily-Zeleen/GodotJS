@@ -42,7 +42,6 @@ namespace jsb::weaver
 
 class InstallGodotJSPresetConfirmationDialog : public ConfirmationDialog
 {
-    GDCLASS(InstallGodotJSPresetConfirmationDialog, ConfirmationDialog);
 
 public:
     Vector<jsb::weaver::InstallFileInfo> pending_installs_;
@@ -60,6 +59,9 @@ private:
     InstallGodotJSPresetConfirmationDialog* confirm_dialog_;
 
     std::shared_ptr<jsb::internal::Process> tsc_;
+
+    void _generate_api_tool_data();
+    void _on_generate_api_tool_data_confirmed(class ConfirmationDialog* p_dialog);
 
     void _on_scene_saved(const String& p_path);
     void _on_resource_saved(const Ref<Resource>& p_resource);

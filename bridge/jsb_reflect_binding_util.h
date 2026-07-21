@@ -5,6 +5,7 @@
 #include "jsb_object_handle.h"
 #include "jsb_environment.h"
 #include "jsb_static_binding_util.h"
+#include "api_tool/api_tool_types.h"
 
 #define GetVariantInfoCollection(env) (env)->get_variant_info_collection() // ::jsb::internal::VariantInfoCollection::global
 
@@ -134,7 +135,7 @@ namespace jsb
         template<bool IsInstanceCallT>
         static void call(const v8::FunctionCallbackInfo<v8::Value>& info)
         {
-            const ::godot::PTRBuiltInMethod func = (const ::godot::PTRBuiltInMethod) info.Data().As<v8::External>()->Value();
+            const ::GDExtensionPtrBuiltInMethod func = (const ::GDExtensionPtrBuiltInMethod) info.Data().As<v8::External>()->Value();
             if constexpr (IsInstanceCallT) func(TVariantOpaquePointer<OwnerT>::from(info), nullptr, nullptr, 0);
             else func(nullptr, nullptr, nullptr, 0);
         }
@@ -156,7 +157,7 @@ namespace jsb
                 jsb_throw(isolate, "bad param at 0");
                 return;
             }
-            const ::godot::PTRBuiltInMethod func = (const ::godot::PTRBuiltInMethod) info.Data().As<v8::External>()->Value();
+            const ::GDExtensionPtrBuiltInMethod func = (const ::GDExtensionPtrBuiltInMethod) info.Data().As<v8::External>()->Value();
             const void* args[] = { &loc_0 };
             if constexpr (IsInstanceCallT) func(TVariantOpaquePointer<OwnerT>::from(info), args, nullptr, 0);
             else func(nullptr, args, nullptr, 0);
@@ -173,7 +174,7 @@ namespace jsb
         static void call(const v8::FunctionCallbackInfo<v8::Value>& info)
         {
             v8::Isolate* isolate = info.GetIsolate();
-            const ::godot::PTRBuiltInMethod func = (const ::godot::PTRBuiltInMethod) info.Data().As<v8::External>()->Value();
+            const ::GDExtensionPtrBuiltInMethod func = (const ::GDExtensionPtrBuiltInMethod) info.Data().As<v8::External>()->Value();
             GDTransitionNumber<real_t> value = 0;
             if constexpr (IsInstanceCallT) func(TVariantOpaquePointer<OwnerT>::from(info), nullptr, &value, 0);
             else func(nullptr, nullptr, &value, 0);
@@ -191,7 +192,7 @@ namespace jsb
         static void call(const v8::FunctionCallbackInfo<v8::Value>& info)
         {
             v8::Isolate* isolate = info.GetIsolate();
-            const ::godot::PTRBuiltInMethod func = (const ::godot::PTRBuiltInMethod) info.Data().As<v8::External>()->Value();
+            const ::GDExtensionPtrBuiltInMethod func = (const ::GDExtensionPtrBuiltInMethod) info.Data().As<v8::External>()->Value();
             GDTransitionNumber<int32_t> value = 0;
             if constexpr (IsInstanceCallT) func(TVariantOpaquePointer<OwnerT>::from(info), nullptr, &value, 0);
             else func(nullptr, nullptr, &value, 0);
@@ -209,7 +210,7 @@ namespace jsb
         static void call(const v8::FunctionCallbackInfo<v8::Value>& info)
         {
             v8::Isolate* isolate = info.GetIsolate();
-            const ::godot::PTRBuiltInMethod func = (const ::godot::PTRBuiltInMethod) info.Data().As<v8::External>()->Value();
+            const ::GDExtensionPtrBuiltInMethod func = (const ::GDExtensionPtrBuiltInMethod) info.Data().As<v8::External>()->Value();
             bool value = false;
             if constexpr (IsInstanceCallT) func(TVariantOpaquePointer<OwnerT>::from(info), nullptr, &value, 0);
             else func(nullptr, nullptr, &value, 0);
@@ -233,7 +234,7 @@ namespace jsb
                 jsb_throw(isolate, "bad param at 0");
                 return;
             }
-            const ::godot::PTRBuiltInMethod func = (const ::godot::PTRBuiltInMethod) info.Data().As<v8::External>()->Value();
+            const ::GDExtensionPtrBuiltInMethod func = (const ::GDExtensionPtrBuiltInMethod) info.Data().As<v8::External>()->Value();
             const void* args[] = { &loc_0 };
             GDTransitionNumber<real_t> value = 0;
             if constexpr (IsInstanceCallT) func(TVariantOpaquePointer<OwnerT>::from(info), args, &value, 0);
@@ -260,7 +261,7 @@ namespace jsb
         static void _getter(const v8::FunctionCallbackInfo<v8::Value>& info)
         {
             v8::Isolate* isolate = info.GetIsolate();
-            const ::godot::PTRGetter getter_func = (const ::godot::PTRGetter) info.Data().As<v8::External>()->Value();
+            const GDExtensionPtrGetter getter_func = (GDExtensionPtrGetter) info.Data().As<v8::External>()->Value();
 
             GDTransitionNumber<real_t> value[] = { 0 };
             getter_func(TVariantOpaquePointer<OwnerT>::from(info), &value);
@@ -269,15 +270,13 @@ namespace jsb
 
         static void _setter(const v8::FunctionCallbackInfo<v8::Value>& info)
         {
-            v8::Isolate* isolate = info.GetIsolate();
-            const v8::Local<v8::Context> context = isolate->GetCurrentContext();
-            const ::godot::PTRSetter setter_func = (const ::godot::PTRSetter) info.Data().As<v8::External>()->Value();
             GDTransitionNumber<real_t> value;
-            if (!StaticBindingUtil<GDTransitionNumber<real_t>>::get(isolate, context, info[0], value))
+            if (!StaticBindingUtil<GDTransitionNumber<real_t>>::get(info[0], value))
             {
-                jsb_throw(isolate, "bad param");
+                jsb_throw(info.GetIsolate(), "bad param");
                 return;
             }
+            const GDExtensionPtrSetter setter_func = (GDExtensionPtrSetter) info.Data().As<v8::External>()->Value();
             setter_func(TVariantOpaquePointer<OwnerT>::from(info), &value);
         }
 
@@ -291,7 +290,7 @@ namespace jsb
         static void _getter(const v8::FunctionCallbackInfo<v8::Value>& info)
         {
             v8::Isolate* isolate = info.GetIsolate();
-            const ::godot::PTRGetter getter_func = (const ::godot::PTRGetter) info.Data().As<v8::External>()->Value();
+            const GDExtensionPtrGetter getter_func = (GDExtensionPtrGetter) info.Data().As<v8::External>()->Value();
 
             GDTransitionNumber<int32_t> value[] = { 0 };
             getter_func(TVariantOpaquePointer<OwnerT>::from(info), &value);
@@ -306,7 +305,7 @@ namespace jsb
                 jsb_throw(info.GetIsolate(), "bad param");
                 return;
             }
-            const ::godot::PTRSetter setter_func = (const ::godot::PTRSetter) info.Data().As<v8::External>()->Value();
+            const GDExtensionPtrSetter setter_func = (GDExtensionPtrSetter) info.Data().As<v8::External>()->Value();
             setter_func(TVariantOpaquePointer<OwnerT>::from(info), &value);
         }
 

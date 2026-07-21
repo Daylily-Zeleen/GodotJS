@@ -65,7 +65,7 @@ Variant _GLOBAL_DEF(const String &p_var, const Variant &p_default, bool p_restar
 Variant _GLOBAL_DEF(const PropertyInfo &p_info, const Variant &p_default, bool p_restart_if_changed = false, bool p_ignore_value_in_docs = false, bool p_basic = false, bool p_internal = false) {
 	Variant ret = _GLOBAL_DEF(p_info.name, p_default, p_restart_if_changed, p_ignore_value_in_docs, p_basic, p_internal);
     Dictionary info = p_info.operator Dictionary();
-    CRASH_COND_MSG(info.has("usage"), "ProjectSettings's setting can't has any usage");
+    info.erase("usage");
 	ProjectSettings::get_singleton()->add_property_info(info);
 	return ret;
 }

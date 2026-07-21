@@ -9,7 +9,7 @@ GodotJSScript::GodotJSScript(): script_list_(this)
 {
     {
         JSB_BENCHMARK_SCOPE(GodotJSScript, Construct);
-        std::lock_guard<std::mutex> lock(GodotJSScriptLanguage::get_singleton()->mutex_);
+        std::lock_guard lock(GodotJSScriptLanguage::get_singleton()->mutex_);
         GodotJSScriptLanguage::get_singleton()->script_list_.add(&script_list_);
     }
     JSB_LOG(VeryVerbose, "new GodotJSScript addr:%d", (uintptr_t) this);
@@ -27,14 +27,9 @@ GodotJSScript::~GodotJSScript()
     }
 }
 
-// ScriptExtension::_can_instantiate()
 bool GodotJSScript::_can_instantiate() const
 {
-#ifdef TOOLS_ENABLED
-    return _is_valid() && _is_tool(); //  (is_tool() || ScriptServer::is_scripting_enabled())
-#else
     return _is_valid();
-#endif
 }
 
 void GodotJSScript::_set_source_code(const String& p_code)
@@ -127,7 +122,7 @@ ScriptInstance* GodotJSScript::instance_create(const v8::Local<v8::Object>& p_th
 
     /* STEP 2, INITIALIZE AND CONSTRUCT */
     {
-        std::lock_guard<std::mutex> lock(GodotJSScriptLanguage::get_singleton()->mutex_);
+        std::lock_guard lock(GodotJSScriptLanguage::get_singleton()->mutex_);
         instances_.insert(p_owner);
     }
     instance->object_id_ = env->bind_godot_object(native_class_id, p_owner, p_this);
@@ -172,7 +167,7 @@ ScriptInstance* GodotJSScript::instance_construct(Object* p_this, bool p_is_temp
 
         // ensure `GodotJSScript::instance_has(obj)` works properly even if a shadow instance is used.
         {
-            std::lock_guard<std::mutex> lock(GodotJSScriptLanguage::get_singleton()->mutex_);
+            std::lock_guard lock(GodotJSScriptLanguage::get_singleton()->mutex_);
             instances_.insert(shadow_instance->get_owner());
         }
         return shadow_instance;
@@ -184,7 +179,6 @@ ScriptInstance* GodotJSScript::instance_construct(Object* p_this, bool p_is_temp
 
     /* STEP 1, CREATE */
     GodotJSScriptInstance* instance = memnew(GodotJSScriptInstance(
-
         Ref(this), 
         p_this, 
         env, 
@@ -433,6 +427,11 @@ TypedArray<Dictionary> GodotJSScript::_get_script_signal_list() const
     return result;
 }
 
+Variant GodotJSScript::_get_script_method_argument_count(const StringName &p_method) const
+{
+    return {}; // JS 函数本身不定参数（TODO: 有没有办法解析出定义的参数个数？）
+}
+
 TypedArray<Dictionary> GodotJSScript::_get_script_method_list() const
 {
     ensure_module_loaded();
@@ -478,6 +477,21 @@ TypedArray<Dictionary> GodotJSScript::_get_script_property_list() const
     return result;
 }
 
+bool GodotJSScript::_has_property_default_value(const StringName &p_property) const
+{
+    ensure_module_loaded();
+    if (const HashMap<StringName, Variant>::ConstIterator it = member_default_values_cache.find(p_property))
+    {
+        return true;
+    }
+
+    if (base.is_valid() && base->_is_valid())
+    {
+        return base->_has_property_default_value(p_property);
+    }
+    return false;
+}
+
 Variant GodotJSScript::_get_property_default_value(const StringName& p_property) const
 {
     ensure_module_loaded();
@@ -508,15 +522,6 @@ bool GodotJSScript::_has_static_method(const StringName& p_method) const
     // TODO: 当前 ScriptInfo 中似乎不包含静态函数信息
     return false; // script_class_info_.methods.has(p_method);
 }
-
-#ifndef DISABLE_DEPRECATED
-bool GodotJSScript::_instance_has(Object* p_this) const
-{
-    jsb_check(loaded_);
-    std::lock_guard lock(GodotJSScriptLanguage::get_singleton()->mutex_);
-    return instances_.has(p_this);
-}
-#endif // !DISABLE_DEPRECATED
 
 Error GodotJSScript::load_source_code(const String &p_path)
 {
@@ -679,7 +684,7 @@ void GodotJSScript::_placeholder_erased(GDExtensionScriptInstancePtr p_placehold
     for (auto i = placeholders.size() - 1; i >= 0; --i)
     {
         PlaceholderScriptInstance *placeholder = placeholders[i];
-        if (placeholder == p_placeholder)
+        if (placeholder->get_extension_instance_ptr() == p_placeholder)
         {
             placeholders[i] = placeholders[placeholders.size() - 1];
             placeholders.resize(placeholders.size() - 1);

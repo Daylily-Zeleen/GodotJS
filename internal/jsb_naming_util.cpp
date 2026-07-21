@@ -1,3 +1,4 @@
+#include "api_tool/api_tool.h"
 #include "jsb_macros.h"
 #include "jsb_internal.h"
 
@@ -78,7 +79,6 @@ namespace jsb::internal
 			"GodotJSREPL",
 			"GodotJSScript",
 			"GodotJSEditorHelper",
-			// "GodotJSEditorProgress",
 
 			// GDScript related classes
 			"GDScript",
@@ -412,11 +412,11 @@ namespace jsb::internal
 			}
 
 			// GDExtension 获取到的 CLass 只能是 exposed
-			// if (!ClassDB::is_class_exposed(class_name))
-			// {
-			// 	JSB_LOG(Verbose, "Ignoring class '%s' because it's not exposed", class_name);
-			// 	continue;
-			// }
+			if (!api_tool::has_class(class_name))
+			{
+				JSB_LOG(Verbose, "Ignoring class '%s' because it's not exposed", class_name);
+				continue;
+			}
 
 			if (!ClassDB::is_class_enabled(class_name))
 			{

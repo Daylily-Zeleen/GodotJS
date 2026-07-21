@@ -62,8 +62,6 @@ public:
 #ifdef TOOLS_ENABLED
 class PlaceholderScriptInstance: public ScriptInstance
 {
-    Object* owner_ = nullptr;
-    Ref<GodotJSScript> script_;
 public:
     PlaceholderScriptInstance(const Ref<GodotJSScript> &p_script, Object* p_owner);
 
@@ -96,9 +94,6 @@ protected:
     };
 
 protected:
-    Object* owner_ = nullptr;
-    Ref<GodotJSScript> script_;
-
 #if JSB_DEBUG
     ScriptProfilingInfo profiling_info_;
 #endif
@@ -243,6 +238,6 @@ public:
     GodotJSScriptInstance(const Ref<GodotJSScript> &p_script, Object *p_owner, jsb::JSEnvironment &p_env, const jsb::ScriptClassID & p_class_id):
         GodotJSScriptInstanceBase(p_script, p_owner),
         env_(p_env),
-        class_id_(p_class_id){}
+        class_id_(p_class_id) {}
 };
 #endif

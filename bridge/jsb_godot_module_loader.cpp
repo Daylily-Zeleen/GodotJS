@@ -2,8 +2,9 @@
 #include "jsb_environment.h"
 #include "jsb_object_bindings.h"
 #include "jsb_type_convert.h"
-#include "../gen/core_constants.gen.h"
-#include "../gen/utility_functions_ext.gen.h"
+
+#include "api_tool/api_tool_types.h"
+#include "api_tool/api_tool.h"
 
 namespace jsb
 {
@@ -56,28 +57,32 @@ namespace jsb
         }
 
         // (2) (global) utility functions.
-        if (VariantExt::has_utility_function(original_name))
+        if (api_tool::has_utility_function(original_name))
         {
             //TODO check static bindings at first, and dynamic bindings as a fallback
 
+            const auto *api_utility_function = api_tool::find_utility_function(original_name);
+            jsb_check(api_utility_function != nullptr);
+
             // dynamic binding:
-            static_assert(sizeof(ValidatedUtilityFunction) == sizeof(void*));
             const int32_t utility_func_index = (int32_t) env->get_variant_info_collection().utility_funcs.size();
             env->get_variant_info_collection().utility_funcs.append({});
             internal::FUtilityMethodInfo& method_info = env->get_variant_info_collection().utility_funcs.write[utility_func_index];
 
-            const int argument_count = VariantExt::get_utility_function_argument_count(original_name);
+            const godot::MethodInfo &method = api_utility_function->method;
+
+            const int argument_count = method.arguments.size();
             method_info.argument_types.resize(argument_count);
             for (int index = 0, num = argument_count; index < num; ++index)
             {
-                method_info.argument_types.write[index] = VariantExt::get_utility_function_argument_type(original_name, index);
+                method_info.argument_types.write[index] = method.arguments[index].type;
             }
             //NOTE currently, utility functions have no default argument.
             // method_info.default_arguments = ...
-            method_info.return_type = VariantExt::get_utility_function_return_type(original_name);
-            method_info.is_vararg = VariantExt::is_utility_function_vararg(original_name);
+            method_info.return_type = method.return_val.type;
+            method_info.is_vararg = api_utility_function->is_vararg();
             method_info.set_debug_name(internal::NamingUtil::get_member_name(original_name));
-            method_info.utility_func = VariantExt::get_validated_utility_function(original_name);
+            method_info.utility_func = api_utility_function;
             JSB_LOG(VeryVerbose, "expose godot utility function %s (%d)", original_name, utility_func_index);
             jsb_check(method_info.utility_func);
 
@@ -86,11 +91,12 @@ namespace jsb
         }
 
         // (3) global_constants
-        if (CoreConstants::is_global_constant(original_name))
+        if (api_tool::has_global_constant(original_name))
         {
-            const int constant_index = CoreConstants::get_global_constant_index(original_name);
-            const int64_t constant_value = CoreConstants::get_global_constant_value(constant_index);
-            info.GetReturnValue().Set(impl::Helper::new_integer(isolate, constant_value));
+            const auto *api_constant = api_tool::find_global_constant(original_name);
+            jsb_check(api_constant != nullptr);
+            JSB_LOG(VeryVerbose, "expose godot global constant %s", original_name);
+            info.GetReturnValue().Set(impl::Helper::new_integer(isolate, api_constant->value));
             return;
         }
 
@@ -105,13 +111,11 @@ namespace jsb
             }
 
             // dynamic binding: godot class types
-            if (ClassDBSingleton::get_singleton()->class_exists(original_name))
+            if (api_tool::has_class(original_name))
             {
-                // TODO: 不要直接使用 ClassDB::ClassInfo！
-                ClassDB::ClassInfo temp_info;
-                temp_info.name = original_name;
-                temp_info.parent_name = ClassDBSingleton::get_singleton()->get_parent_class(original_name);
-                if (const NativeClassInfoPtr class_info = env->expose_godot_object_class(&temp_info))
+                const api_tool::ApiClass* api_class = api_tool::find_class(original_name);
+                jsb_check(api_class != nullptr);
+                if (const NativeClassInfoPtr class_info = env->expose_godot_object_class(original_name))
                 {
                     jsb_check(class_info->name == p_type_name);
                     jsb_check(!class_info->clazz.IsEmpty());
@@ -122,11 +126,11 @@ namespace jsb
         }
 
         // (5) global_enums
-        if (CoreConstants::is_global_enum(original_name))
+        if (api_tool::has_global_enum(original_name))
         {
-            HashMap<StringName, int64_t> enum_values;
-            CoreConstants::get_enum_values(original_name, &enum_values);
-            info.GetReturnValue().Set(BridgeHelper::to_global_enum(isolate, context, enum_values));
+            const auto &api_enum_info = api_tool::find_global_enum(original_name);
+            jsb_check(api_enum_info != nullptr);
+            info.GetReturnValue().Set(BridgeHelper::to_global_enum(isolate, context, api_enum_info));
             return;
         }
 

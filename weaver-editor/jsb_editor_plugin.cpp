@@ -1,8 +1,11 @@
 ﻿#include "jsb_editor_plugin.h"
+#include "api_tool/api_tool.h"
 #include "jsb_docked_panel.h"
+#include "jsb_editor_helper.h"
 #include "jsb_editor_progress.h"
 #include "jsb_export_plugin.h"
 
+#include <godot_cpp/classes/confirmation_dialog.hpp>
 #include <godot_cpp/classes/editor_interface.hpp>
 #include <godot_cpp/classes/editor_file_system.hpp>
 #include <godot_cpp/classes/editor_toaster.hpp>
@@ -18,6 +21,7 @@
 
 enum
 {
+    MENU_ID_GENERATE_API_DATA,
     MENU_ID_INSTALL_PROJECT_FILES,
     MENU_ID_GENERATE_TYPES,
     MENU_ID_CLEANUP_INVALID_FILES,
@@ -144,6 +148,7 @@ void GodotJSEditorPlugin::_on_menu_pressed(int p_what)
 {
     switch (p_what)
     {
+    case MENU_ID_GENERATE_API_DATA: _generate_api_tool_data(); break;
     case MENU_ID_INSTALL_PROJECT_FILES: try_install_project_files(); break;
     case MENU_ID_GENERATE_TYPES: generate_types(); break;
     case MENU_ID_CLEANUP_INVALID_FILES: cleanup_invalid_files(); break;
@@ -161,8 +166,14 @@ GodotJSEditorPlugin::GodotJSEditorPlugin()
     // jsb::internal::Settings::on_editor_init();
     PopupMenu *menu = memnew(PopupMenu);
     add_tool_submenu_item(TTR("GodotJS"), menu);
+    menu->add_item(TTR("Generate API Data"), MENU_ID_GENERATE_API_DATA);
+    menu->add_separator();
     menu->add_item(TTR("Install Project Files"), MENU_ID_INSTALL_PROJECT_FILES);
     menu->add_item(TTR("Generate Types"), MENU_ID_GENERATE_TYPES);
+    if (!api_tool::has_generated_data()) {
+        menu->set_item_disabled(menu->get_item_index(MENU_ID_INSTALL_PROJECT_FILES), true);
+        menu->set_item_disabled(menu->get_item_index(MENU_ID_GENERATE_TYPES), true);
+    }
     menu->add_separator();
     menu->add_item(TTR("Cleanup Invalid Files"), MENU_ID_CLEANUP_INVALID_FILES);
     menu->connect("id_pressed", callable_mp(this, &GodotJSEditorPlugin::_on_menu_pressed));
@@ -533,6 +544,8 @@ bool GodotJSEditorPlugin::install_files(const Vector<jsb::weaver::InstallFileInf
 
 void GodotJSEditorPlugin::install_project_files(std::function<void(bool)> complete, const Vector<jsb::weaver::InstallFileInfo>& p_files)
 {
+    ERR_FAIL_COND_MSG(!api_tool::has_generated_data(), "Please generate api data first.");
+
     if (!install_files(p_files)) return;
     load_editor_entry_module();
     ensure_tsc_installed();
@@ -704,6 +717,8 @@ void GodotJSEditorPlugin::_on_generate_completed(const v8::FunctionCallbackInfo<
 
 void GodotJSEditorPlugin::generate_types(std::function<void(bool)> complete, bool skip_static_types)
 {
+    ERR_FAIL_COND_MSG(!api_tool::has_generated_data(), "Please generate api data first.");
+
     if (GodotJSEditorPlugin* editor_plugin = GodotJSEditorPlugin::get_singleton())
     {
         if (!skip_static_types)
@@ -844,8 +859,27 @@ void GodotJSEditorPlugin::install_static_types(std::function<void(bool)> complet
     }
 }
 
+void GodotJSEditorPlugin::_generate_api_tool_data() {
+    ConfirmationDialog* dialog = memnew(ConfirmationDialog);
+    dialog->set_title(TTR("Generate API Tool Data?"));
+    dialog->set_text(TTR("Generate API Tool will save and reboot the editor.\nDo you want to continue?"));
+    dialog->connect("confirmed", callable_mp(this, &GodotJSEditorPlugin::_on_generate_api_tool_data_confirmed).bind(dialog));
+    dialog->connect("canceled", callable_mp(static_cast<Node*>(dialog), &Node::queue_free));
+    add_child(dialog);
+    dialog->popup_centered();
+}
+
+void GodotJSEditorPlugin::_on_generate_api_tool_data_confirmed(ConfirmationDialog* p_dialog) {
+    EditorInterface::get_singleton()->save_all_scenes();
+    p_dialog->queue_free();
+
+    GodotJSEditorHelper::generate_api_tool_data();
+}
+
 void GodotJSEditorPlugin::try_install_project_files(std::function<void(bool)> complete, bool force)
 {
+    ERR_FAIL_COND_MSG(!api_tool::has_generated_data(), "Please generate api data first.");
+
     if (GodotJSEditorPlugin* editor_plugin = GodotJSEditorPlugin::get_singleton())
     {
         editor_plugin->remove_obsolete_files();
@@ -1228,9 +1262,9 @@ void GodotJSEditorPlugin::ensure_tsc_installed()
 
 void GodotJSEditorPlugin::_bind_methods()
 {
-    ClassDB::bind_static_method(jsb_typename(GodotJSEditorPlugin), D_METHOD("_add_progress_task", "text", "severity"), &GodotJSEditorPlugin::_add_progress_task);
-    ClassDB::bind_static_method(jsb_typename(GodotJSEditorPlugin), D_METHOD("show_toast", "text", "severity"), &GodotJSEditorPlugin::_update_progress_task);
-    ClassDB::bind_static_method(jsb_typename(GodotJSEditorPlugin), D_METHOD("show_toast", "text", "severity"), &GodotJSEditorPlugin::_finish_progress_task);
+    ClassDB::bind_static_method(jsb_typename(GodotJSEditorPlugin), D_METHOD("add_progress_task", "task_name", "total_steps"), &GodotJSEditorPlugin::_add_progress_task);
+    ClassDB::bind_static_method(jsb_typename(GodotJSEditorPlugin), D_METHOD("update_progress_task", "task_name", "state", "step"), &GodotJSEditorPlugin::_update_progress_task);
+    ClassDB::bind_static_method(jsb_typename(GodotJSEditorPlugin), D_METHOD("finish_progress_task", "task_name"), &GodotJSEditorPlugin::_finish_progress_task);
 }
 
 void GodotJSEditorPlugin::_add_progress_task(const String& p_task_name, int total_steps){

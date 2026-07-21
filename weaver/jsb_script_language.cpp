@@ -74,7 +74,7 @@ GodotJSScriptLanguage::~GodotJSScriptLanguage()
     singleton_ = nullptr;
 
     //TODO manage script list in a safer way (access and ref with script.id)
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard lock(mutex_);
     while (SelfList<GodotJSScript>* script_el = script_list_.first())
     {
         script_el->remove_from_list();
@@ -94,7 +94,7 @@ void GodotJSScriptLanguage::_init()
     params.initial_class_slots = (int) ClassDBSingleton::get_singleton()->get_class_list().size() + JSB_MASTER_INITIAL_CLASS_EXTRA_SLOTS;
     params.initial_object_slots = JSB_MASTER_INITIAL_OBJECT_SLOTS;
     params.initial_script_slots = JSB_MASTER_INITIAL_SCRIPT_SLOTS;
-    params.debugger_port = jsb::internal::Settings::get_debugger_port();
+    // params.debugger_port = jsb::internal::Settings::get_debugger_port();
     params.thread_id = OS::get_singleton()->get_thread_caller_id();
 
     // main environment
@@ -128,7 +128,7 @@ void GodotJSScriptLanguage::_finish()
     {
         std::vector<ShadowEnvironment> shadow_environments;
         {
-            std::lock_guard<std::mutex> shadow_lock(shadow_mutex_);
+            std::lock_guard shadow_lock(shadow_mutex_);
             shadow_environments = shadow_environments_;
             shadow_environments_.clear();
         }
@@ -150,7 +150,7 @@ void GodotJSScriptLanguage::_frame()
 
 #if JSB_DEBUG
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard lock(mutex_);
         if (profile_info_map_.enabled)
         {
             for (auto& class_kv : profile_info_map_.classes)
@@ -449,7 +449,7 @@ void GodotJSScriptLanguage::scan_external_changes()
 #ifdef TOOLS_ENABLED
     // fix scripts with no .js counterpart found (only missing scripts)
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard lock(mutex_);
         const SelfList<GodotJSScript>* elem = script_list_.first();
         while (elem)
         {
@@ -473,7 +473,7 @@ void GodotJSScriptLanguage::_thread_exit()
 void GodotJSScriptLanguage::_profiling_start()
 {
 #if JSB_DEBUG
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard lock(mutex_);
     profile_info_map_.enabled = true;
 #endif
 }
@@ -810,4 +810,8 @@ void GodotJSScriptLanguage::reload_scripts_internal(const Array& p_scripts, bool
 	}
 
 #endif // DEBUG_ENABLED
+}
+
+
+void GodotJSScriptLanguage::_bind_methods() {
 }

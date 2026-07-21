@@ -34,13 +34,13 @@ public:
 #define JSB_SHADOW_REALM_MODULE_NAME "godot.shadowRealm"
 
 #include <mutex>
-#define MUTEX_LOCK_GUARD(lock) std::lock_guard<std::mutex> _guard_##__LINE__(lock)
+#define MUTEX_LOCK_GUARD(lock) std::lock_guard _guard_##__LINE__(lock)
 
 namespace jsb {
 enum class FinalizationType : uint8_t;
 
 using ShadowRealmID = internal::Index32;
-using ShadowRealmLock = std::mutex;
+using ShadowRealmLock = std::recursive_mutex;
 class Environment;
 class TransferableShadowRealm;
 
@@ -430,7 +430,7 @@ private:
 
 private:
 	static std::unordered_multimap<WrapperIdentity, TWeakRef<v8::Object>, WrapperIdentityHash, WrapperIdentityEqual> wrapper_cache_;
-	static std::mutex lock_;
+	static std::recursive_mutex lock_;
 	static std::unordered_map<v8::Isolate *, TStrongRef<v8::Name>> flag_symbols_;
 
 public:
@@ -478,7 +478,7 @@ public:
 
 std::unordered_map<v8::Isolate *, TStrongRef<v8::Name>> CrossWrapper::flag_symbols_;
 std::unordered_multimap<WrapperIdentity, TWeakRef<v8::Object>, CrossWrapper::WrapperIdentityHash, CrossWrapper::WrapperIdentityEqual> CrossWrapper::wrapper_cache_{};
-std::mutex CrossWrapper::lock_;
+std::recursive_mutex CrossWrapper::lock_;
 
 class FunctionCrossWrapper : public CrossWrapper {
 private:
@@ -917,7 +917,7 @@ class ShadowRealm {
 
 protected:
 	static internal::SArray<ShadowRealm *, ShadowRealmID> &get_shadow_realm_list();
-	static std::mutex lock_;
+	static std::recursive_mutex lock_;
 
 public:
 	ShadowRealm(Environment *p_master) : token_(p_master) {}
@@ -1328,7 +1328,7 @@ internal::SArray<ShadowRealm *, ShadowRealmID> &ShadowRealm::get_shadow_realm_li
 	static internal::SArray<ShadowRealm *, ShadowRealmID> list;
 	return list;
 }
-std::mutex ShadowRealm::lock_;
+std::recursive_mutex ShadowRealm::lock_;
 #pragma endregion ShadownRealm
 
 #pragma region ShadowRealmMessage

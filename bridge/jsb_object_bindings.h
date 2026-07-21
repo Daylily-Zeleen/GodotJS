@@ -9,7 +9,7 @@ namespace jsb
 
     struct ObjectReflectBindingUtil
     {
-        static NativeClassInfoPtr reflect_bind(Environment* p_env, const ClassDB::ClassInfo* p_class_info, NativeClassID* r_class_id);
+        static NativeClassInfoPtr reflect_bind(Environment* p_env, const godot::StringName& p_class_name, NativeClassID* r_class_id);
 
         static void _godot_object_free(const v8::FunctionCallbackInfo<v8::Value>& info);
         static void _godot_object_method(const v8::FunctionCallbackInfo<v8::Value>& info);

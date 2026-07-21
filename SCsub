@@ -614,7 +614,7 @@ generate_code([\
     ])
 
 # common parts
-env_jsb.add_source_files(module_obj, ["register_types.cpp", "jsb_project_preset.gen.cpp", "utility_functions_ext.gen.cpp", "core_constants.gen.cpp"]) # 调整 "utility_functions_ext.gen.cpp", "core_constants.gen.cpp"
+env_jsb.add_source_files(module_obj, ["register_types.cpp", "jsb_project_preset.gen.cpp"])
 env_jsb.add_source_files(module_obj, "internal/*.cpp")
 env_jsb.add_source_files(module_obj, "weaver/*.cpp")
 env_jsb.add_source_files(module_obj, "bridge/*.cpp")

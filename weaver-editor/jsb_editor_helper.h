@@ -29,6 +29,9 @@ public:
     static Dictionary get_resource_type_descriptor(const String &p_path);
     static Dictionary get_scene_nodes(const String &p_path);
     static void show_toast(const String& p_text, int p_severity);
+
+    static bool has_api_tool_data();
+    static void generate_api_tool_data();
 };
 
 VARIANT_BITFIELD_CAST(GodotJSEditorHelper::SceneDTSGenerateStrategic)

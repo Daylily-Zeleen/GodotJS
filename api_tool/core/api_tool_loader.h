@@ -10,27 +10,22 @@
 #include "../api_tool_types.h"
 #include <godot_cpp/variant/string_name.hpp>
 #include <godot_cpp/variant/string.hpp>
-#include <godot_cpp/variant/packed_string_array.hpp>
-#include <godot_cpp/templates/hash_map.hpp>
+#include <godot_cpp/templates/hash_set.hpp>
 #include <deque>
 #include <memory>
 #include <shared_mutex>
 
-namespace api_tool {
+namespace api_tool::internal {
 
 class ApiLoader {
 public:
     ApiLoader();
     ~ApiLoader();
 
-    // Initialize: set data root directory, load header.
-    godot::Error initialize(const godot::String &p_base_dir);
+    godot::Error initialize();
 
-    // Clear all cached data. Calls on_cache_invalidated callback if set.
+    // Clear all cached data. Calls cache invalidation callbacks.
     void clear();
-
-    // Set cache invalidation callback (req 5).
-    void set_cache_invalidated_callback(CacheInvalidatedCallback p_callback, void *p_userdata);
 
     bool is_loaded() const;
     const ApiHeader &get_header() const;
@@ -40,6 +35,7 @@ public:
 
     const ApiUtilityFunction *get_utility_function(const godot::StringName &p_name);
     const ApiBuiltinClass *get_builtin_class(const godot::StringName &p_name);
+    const ApiBuiltinClass *get_builtin_class(godot::Variant::Type p_type); // O(1) via fixed-size array
     const ApiClass *get_class(const godot::StringName &p_name);
     const ApiEnumInfo *get_global_enum(const godot::StringName &p_name);
     const ApiConstantInfo *get_global_constant(const godot::StringName &p_name);
@@ -49,21 +45,36 @@ public:
 #ifdef TOOLS_ENABLED
     // ---- Document queries (no cache, direct file read, TOOLS_ENABLED only) ----
     // Returns std::unique_ptr<T> (caller owns). Returns nullptr if file missing/corrupted.
-std::unique_ptr<ApiClassDocument> find_document(const godot::StringName &p_name);
+    std::unique_ptr<ApiClassDocument> find_document(const godot::StringName &p_name);
     std::unique_ptr<ApiUtilityFunctionDocument> find_utility_function_document(const godot::StringName &p_name);
     std::unique_ptr<ApiGlobalEnumDocument> find_global_enum_document(const godot::StringName &p_name);
     std::unique_ptr<ApiGlobalConstantDocument> find_global_constant_document(const godot::StringName &p_name);
 #endif // TOOLS_ENABLED
 
-    // ---- List all names ----
+    // ---- List all names (O(1) lookup via HashSet) ----
 
-    godot::PackedStringArray list_utility_functions();
-    godot::PackedStringArray list_builtin_classes();
-    godot::PackedStringArray list_classes();
-    godot::PackedStringArray list_global_enums();
-    godot::PackedStringArray list_global_constants();
-    godot::PackedStringArray list_singletons();
-    godot::PackedStringArray list_native_structures();
+    godot::HashSet<godot::StringName> list_utility_functions();
+    const godot::HashSet<godot::StringName> &list_builtin_classes();
+    const godot::HashSet<godot::StringName> &list_classes();
+    const godot::HashSet<godot::StringName> &list_global_enums();
+    const godot::HashSet<godot::StringName> &list_global_constants();
+    godot::HashSet<godot::StringName> list_singletons();
+    godot::HashSet<godot::StringName> list_native_structures();
+
+    // ---- Existence checks (O(1) via cache) ----
+
+    bool has_utility_function(const godot::StringName &p_name);
+    bool has_builtin_class(const godot::StringName &p_name);
+    bool has_class(const godot::StringName &p_name);
+    bool has_global_enum(const godot::StringName &p_name);
+    bool has_global_constant(const godot::StringName &p_name);
+    bool has_singleton(const godot::StringName &p_name);
+    bool has_native_structure(const godot::StringName &p_name);
+
+    // ---- Cache invalidation callbacks ----
+
+    ::CacheInvalidatedHandle register_cache_invalidated_callback(::CacheInvalidatedCallback p_callback);
+    void unregister_cache_invalidated_callback(::CacheInvalidatedHandle p_handle);
 
     // ---- Count queries (no lock for simple file counts) ----
 
@@ -72,6 +83,10 @@ std::unique_ptr<ApiClassDocument> find_document(const godot::StringName &p_name)
     int32_t get_class_count();
     int32_t get_global_enum_count();
     int32_t get_global_constant_count();
+
+    bool has_generated_data() const;
+
+    const godot::String &get_api_dumping_dir();
 
 private:
     // Stable-pointer cache: deque stores data, HashMap stores name->index.
@@ -103,9 +118,11 @@ private:
         }
     };
 
+    static void update_base_dir();
+
     // Ensure-load: check cache -> load from file -> cache -> return pointer.
     const ApiUtilityFunction *ensure_utility_function(const godot::StringName &p_name);
-    const ApiBuiltinClass *ensure_builtin_class(const godot::StringName &p_name);
+    const ApiBuiltinClass *ensure_builtin_class(const godot::Variant::Type &p_type);
     const ApiClass *ensure_class(const godot::StringName &p_name);
     const ApiEnumInfo *ensure_global_enum(const godot::StringName &p_name);
     const ApiConstantInfo *ensure_global_constant(const godot::StringName &p_name);
@@ -125,19 +142,32 @@ private:
     godot::LocalVector<godot::String> get_cached_names_singleton() const;
     godot::LocalVector<godot::String> get_cached_names_native() const;
 
+    // Ensure name list caches are populated.
+    void ensure_builtin_class_names();
+    void ensure_class_names();
+    void ensure_global_enum_names();
+    void ensure_global_constant_names();
+
     godot::String base_dir_;
     ApiHeader header_;
     bool loaded_ = false;
 
-    // Cache invalidation callback (req 5)
-    CacheInvalidatedCallback on_cache_invalidated_ = nullptr;
-    void *cache_callback_userdata_ = nullptr;
+    // Cache invalidation callbacks (handle-based)
+    struct CallbackEntry {
+        ::CacheInvalidatedHandle handle;
+        CacheInvalidatedCallback callback;
+    };
+    std::vector<CallbackEntry> cache_callbacks_;
+    ::CacheInvalidatedHandle next_callback_handle_ = 1;
 
     // Caches
     TypedCache<ApiUtilityFunction> utility_function_cache_;
     bool all_utility_functions_loaded_ = false;
 
-    TypedCache<ApiBuiltinClass> builtin_class_cache_;
+    // Fixed-size array for O(1) builtin class lookup by Variant::Type
+    // Indexed by Variant::Type (0..VARIANT_MAX-1), nullptr if not loaded/not a builtin type
+    ApiBuiltinClass *builtin_class_by_type_[godot::Variant::VARIANT_MAX] = {nullptr};
+
     TypedCache<ApiClass> class_cache_;
     TypedCache<ApiEnumInfo> enum_cache_;
     TypedCache<ApiConstantInfo> constant_cache_;
@@ -147,6 +177,16 @@ private:
 
     TypedCache<ApiNativeStructure> native_structure_cache_;
     bool all_native_structures_loaded_ = false;
+
+    // Name list caches (populated on first list_* call, cleared on clear())
+    godot::HashSet<godot::StringName> builtin_class_names_cache_;
+    bool builtin_class_names_cached_ = false;
+    godot::HashSet<godot::StringName> class_names_cache_;
+    bool class_names_cached_ = false;
+    godot::HashSet<godot::StringName> global_enum_names_cache_;
+    bool global_enum_names_cached_ = false;
+    godot::HashSet<godot::StringName> global_constant_names_cache_;
+    bool global_constant_names_cached_ = false;
 
     // RWLock: shared_mutex for concurrent reads, exclusive writes (req 3)
     mutable std::shared_mutex mutex_;

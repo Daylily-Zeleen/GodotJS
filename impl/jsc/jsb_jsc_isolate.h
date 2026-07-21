@@ -343,7 +343,7 @@ namespace v8
 
         jsb::internal::SArray<JSValueRef, jsb::impl::CapturedValueID> captured_values_;
         RingBuffer<jsb::impl::CapturedValueID> pending_delete_;
-        mutable std::mutex pending_finalize_mutex_;
+        mutable std::recursive_mutex pending_finalize_mutex_;
         Vector<jsb::impl::InternalData*> pending_finalize_;
 
         uint16_t stack_pos_;

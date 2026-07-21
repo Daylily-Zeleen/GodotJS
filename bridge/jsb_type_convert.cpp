@@ -47,10 +47,9 @@ namespace jsb
                 JSB_LOG(Warning, "failed to convert array element %d (strictly, as %s), it'll be left as the default value", index, Variant::get_type_name((Variant::Type) GetTypeInfo<ElemTy>::VARIANT_TYPE));
             }
         }
-        
-        // GDExtension: Vector<T> cannot be assigned to Variant directly in godot-cpp 4.7
+
         r_packed = packed;
-        return false;
+        return true;
 #else
         return false;
 #endif
@@ -449,24 +448,17 @@ namespace jsb
         }
 
         const StringName class_name = p_godot_obj->get_class();
-        if (ClassDBSingleton::get_singleton()->class_exists(class_name))
+        if (NativeClassID class_id;
+            NativeClassInfoPtr class_info = environment->expose_godot_object_class(class_name, &class_id))
         {
-            // TODO: 如何更高效
-            ClassDB::ClassInfo temp_info;
-            temp_info.name = class_name;
-            temp_info.parent_name = ClassDBSingleton::get_singleton()->get_parent_class(class_name);
-            if (NativeClassID class_id;
-                NativeClassInfoPtr class_info = environment->expose_godot_object_class(&temp_info, &class_id))
-            {
-                // class_info ptr will be invalid after escape()
-                // to avoid possible side effects during `NewInstance`
-                r_jval = class_info.escape()->clazz.NewInstance(context);
-                jsb_check(TypeConvert::is_object(r_jval));
+            // class_info ptr will be invalid after escape()
+            // to avoid possible side effects during `NewInstance`
+            r_jval = class_info.escape()->clazz.NewInstance(context);
+            jsb_check(TypeConvert::is_object(r_jval));
 
-                // the lifecycle will be managed by javascript runtime, DO NOT DELETE it externally
-                environment->bind_godot_object(class_id, p_godot_obj, r_jval.As<v8::Object>());
-                return true;
-            }
+            // the lifecycle will be managed by javascript runtime, DO NOT DELETE it externally
+            environment->bind_godot_object(class_id, p_godot_obj, r_jval.As<v8::Object>());
+            return true;
         }
         JSB_LOG(Error, "failed to expose godot class '%s'", class_name);
         return false;
