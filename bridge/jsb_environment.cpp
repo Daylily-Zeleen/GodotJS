@@ -374,8 +374,10 @@ namespace jsb
             debugger_ready_future_ = debugger_ready_promise_.get_future();
             //TODO call `start_debugger` at different stages for Editor/Game Runtimes.
 #endif
-
-            start_debugger(p_params.debugger_port);
+            if (p_params.debugger_port != 0)
+            {
+                start_debugger(p_params.debugger_port);
+            }
         }
     }
 
@@ -1070,6 +1072,13 @@ namespace jsb
         debugger_.init(isolate_, p_port);
         debugger_.on_context_created(context_.Get(isolate_));
 #endif
+    }
+
+    bool Environment::is_debugger_started() const {
+#if JSB_WITH_DEBUGGER
+        return debugger_.is_initialized();
+#endif
+        return false;
     }
 
     void Environment::get_statistics(Statistics& r_stats) const

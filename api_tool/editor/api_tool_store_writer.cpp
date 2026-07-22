@@ -43,7 +43,6 @@ template<typename TApiMethodInfo> requires std::is_base_of_v<ApiMemberMethodBase
 static void serialize_api_method_info(PayloadWriter &w, const TApiMethodInfo &ami) {
     w.write(ami.method, serialize_method_info_payload);
     w.write(ami.hash);
-    w.write(ami.hash_compatibility);
 }
 
 
@@ -97,6 +96,13 @@ static void serialize_operator_info(PayloadWriter &r, const ApiOperatorInfo &v) 
 
 static void serialize_constructor_info(PayloadWriter &r, const ApiConstructorInfo &v) {
     r.write(v.arguments, serialize_property_info);
+}
+
+static void serialize_method_compat_hashes(PayloadWriter &w, const ApiMethodCompatibilityHashes &v) {
+#ifndef DISABLE_DEPRECATED
+    w.write(v.method_name);
+    w.write(v.hashes);
+#endif // DISABLE_DEPRECATED
 }
 
 static void serialize_member_info(PayloadWriter &r, const ApiMemberInfo &v) {
@@ -254,6 +260,22 @@ Error ApiStoreWriter::write_native_structures(const String &p_path, const LocalV
 }
 
 // ============================================================================
+// ApiStoreWriter: Compatibility Hashes (per-class file)
+// ============================================================================
+
+Error ApiStoreWriter::write_compatibility_hashes(const String &p_path, const ApiCompatibilityHashData &p_data) {
+#ifndef DISABLE_DEPRECATED
+    Error err {OK};
+    std::unique_ptr<PayloadWriter> w_ptr = PayloadWriter::open(p_path, err);
+    if (err) return err;
+    PayloadWriter &w = *w_ptr.get();
+
+    w.write(p_data.methods, serialize_method_compat_hashes);
+#endif // DISABLE_DEPRECATED
+    return OK;
+}
+
+// ============================================================================
 // ApiStoreWriter: Class Document
 // ============================================================================
 
@@ -299,7 +321,6 @@ static void serialize_operator_document(PayloadWriter &w, const ApiOperatorDocum
 }
 
 static void serialize_constructor_document(PayloadWriter &w, const ApiConstructorDocument &d) {
-    w.write(d.index);
     w.write(d.description);
 }
 

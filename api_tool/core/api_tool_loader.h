@@ -51,6 +51,10 @@ public:
     std::unique_ptr<ApiGlobalConstantDocument> find_global_constant_document(const godot::StringName &p_name);
 #endif // TOOLS_ENABLED
 
+    // ---- Compatibility hash queries (no cache, direct file read) ----
+    godot::LocalVector<MethodHash> get_builtin_method_compatibility_hashes(godot::Variant::Type p_type, const godot::StringName &p_method_name);
+    godot::LocalVector<MethodHash> get_class_method_compatibility_hashes(const godot::StringName &p_class_name, const godot::StringName &p_method_name);
+
     // ---- List all names (O(1) lookup via HashSet) ----
 
     godot::HashSet<godot::StringName> list_utility_functions();

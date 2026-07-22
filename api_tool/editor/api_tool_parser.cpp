@@ -174,7 +174,7 @@ static PropertyInfo parse_property_info(const Dictionary &d) {
 }
 
 template<typename TApiMethodInfo>
-static TApiMethodInfo parse_method(const Dictionary &d) {
+static TApiMethodInfo parse_method(const Dictionary &d, ApiCompatibilityHashData *r_compat_data = nullptr) {
     TApiMethodInfo ami;
     ami.method.name = dict_get_string_name(d, "name");
 
@@ -187,15 +187,22 @@ static TApiMethodInfo parse_method(const Dictionary &d) {
     if (dict_has(d, "is_required") && bool(d["is_required"])) flags |= GDEXTENSION_METHOD_FLAG_VIRTUAL_REQUIRED;
     ami.method.flags = flags;
 
-    ami.hash = dict_has(d, "hash") ? int64_t(d["hash"]) : 0;
+    ami.hash = dict_has(d, "hash") ? MethodHash(d["hash"]) : 0;
 
+#ifndef DISABLE_DEPRECATED
     if (dict_has(d, "hash_compatibility")) {
         Array compat = d["hash_compatibility"];
-        ami.hash_compatibility.reserve(compat.size());
-        for (int i = 0; i < compat.size(); i++) {
-            ami.hash_compatibility.push_back(int64_t(compat[i]));
+        if (r_compat_data) {
+            ApiMethodCompatibilityHashes mch;
+            mch.method_name = ami.method.name;
+            mch.hashes.reserve(compat.size());
+            for (int i = 0; i < compat.size(); i++) {
+                mch.hashes.push_back(MethodHash(compat[i]));
+            }
+            r_compat_data->methods.push_back(mch);
         }
     }
+#endif // DISABLE_DEPRECATED
 
     // return_val: builtin_classes uses "return_type", classes uses "return_value"
     if (dict_has(d, "return_value")) {
@@ -346,6 +353,10 @@ Error ApiParser::prepare_output_dirs(const String &p_output_dir) {
         DIR_DOC_UTILITY_FUNCTIONS,
         DIR_DOC_GLOBAL_ENUMS,
         DIR_DOC_GLOBAL_CONSTANTS,
+#ifndef DISABLE_DEPRECATED
+        // Compatibility hashes subdirectory
+        DIR_COMPAT_HASHES,
+#endif // DISABLE_DEPRECATED
     };
     for (const char *subdir : subdirs) {
         String path = p_output_dir + String("/") + subdir;
@@ -405,7 +416,7 @@ Error ApiParser::parse_and_write_utility_functions(const Dictionary &p_root, con
         if (dict_has(fd, "is_vararg") && bool(fd["is_vararg"])) flags |= GDEXTENSION_METHOD_FLAG_VARARG;
         func.method.flags = flags;
 
-        func.hash = dict_has(fd, "hash") ? int64_t(fd["hash"]) : 0;
+        func.hash = dict_has(fd, "hash") ? MethodHash(fd["hash"]) : 0;
         func.category = dict_get_string_name(fd, "category");
 
         // return_type -> return_val PropertyInfo
@@ -459,6 +470,7 @@ Error ApiParser::parse_and_write_builtin_classes(const Dictionary &p_root, const
     Array classes = p_root["builtin_classes"];
     String dir = p_output_dir + String("/") + String(DIR_BUILTIN_CLASSES);
     String doc_dir = p_output_dir + String("/") + String(DIR_DOC_BUILTIN_CLASSES);
+    String compat_dir = p_output_dir + String("/") + String(DIR_COMPAT_HASHES);
     Error overall = OK;
 
     for (int i = 0; i < classes.size(); i++) {
@@ -482,6 +494,9 @@ Error ApiParser::parse_and_write_builtin_classes(const Dictionary &p_root, const
         if (dict_has(cd, "brief_description")) {
             doc.brief_description = String(cd["brief_description"]);
         }
+
+        // Collect compatibility hashes for this builtin class
+        ApiCompatibilityHashData compat_data;
 
         if (dict_has(cd, "members")) {
             Array members = cd["members"];
@@ -555,8 +570,7 @@ Error ApiParser::parse_and_write_builtin_classes(const Dictionary &p_root, const
             doc.methods.reserve(methods.size());
             for (int j = 0; j < methods.size(); j++) {
                 Dictionary md = methods[j];
-                ApiBuiltInMethod mbi = parse_method<ApiBuiltInMethod>(md);
-                mbi.set_variant_type(bt.type); // Propagate variant_type for lazy loading
+                ApiBuiltInMethod mbi = parse_method<ApiBuiltInMethod>(md, &compat_data);
                 bt.methods.push_back(mbi);
                 ApiMethodDocument mdoc;
                 mdoc.name = String(dict_get_string_name(md, "name"));
@@ -592,7 +606,6 @@ Error ApiParser::parse_and_write_builtin_classes(const Dictionary &p_root, const
                 Dictionary ctor_d = constructors[j];
                 bt.constructors.push_back(parse_constructor(ctor_d));
                 ApiConstructorDocument cdoc;
-                cdoc.index = j;
                 if (dict_has(ctor_d, "description")) {
                     cdoc.description = String(ctor_d["description"]);
                 }
@@ -607,6 +620,14 @@ Error ApiParser::parse_and_write_builtin_classes(const Dictionary &p_root, const
             ERR_PRINT("[API Tool] Failed to write builtin type: " + Variant::get_type_name(bt.type));
             overall = err;
         }
+
+#ifndef DISABLE_DEPRECATED
+        // Write compatibility hashes file (only if data exists)
+        if (compat_data.methods.size() > 0) {
+            String compat_path = compat_dir + String("/") + Variant::get_type_name(bt.type) + String(FILE_EXT_COMPAT);
+            ApiStoreWriter::write_compatibility_hashes(compat_path, compat_data);
+        }
+#endif // DISABLE_DEPRECATED
 
         // Write document file
         String doc_path = doc_dir + String("/") + Variant::get_type_name(bt.type) + String(FILE_EXT_DOC);
@@ -626,6 +647,7 @@ Error ApiParser::parse_and_write_classes(const Dictionary &p_root, const String 
     Array classes = p_root["classes"];
     String dir = p_output_dir + String("/") + String(DIR_CLASSES);
     String doc_dir = p_output_dir + String("/") + String(DIR_DOC_CLASSES);
+    String compat_dir = p_output_dir + String("/") + String(DIR_COMPAT_HASHES);
     Error overall = OK;
 
     for (int i = 0; i < classes.size(); i++) {
@@ -647,13 +669,16 @@ Error ApiParser::parse_and_write_classes(const Dictionary &p_root, const String 
             doc.brief_description = String(cd["brief_description"]);
         }
 
+        // Collect compatibility hashes for this class
+        ApiCompatibilityHashData compat_data;
+
         if (dict_has(cd, "methods")) {
             Array methods = cd["methods"];
             cls.methods.reserve(methods.size());
             doc.methods.reserve(methods.size());
             for (int j = 0; j < methods.size(); j++) {
                 Dictionary md = methods[j];
-                cls.methods.push_back(parse_method<ApiClassMethod>(md));
+                cls.methods.push_back(parse_method<ApiClassMethod>(md, &compat_data));
                 ApiMethodDocument mdoc;
                 mdoc.name = String(dict_get_string_name(md, "name"));
                 if (dict_has(md, "description")) {
@@ -747,6 +772,14 @@ Error ApiParser::parse_and_write_classes(const Dictionary &p_root, const String 
             ERR_PRINT("[API Tool] Failed to write class: " + String(cls.name));
             overall = err;
         }
+
+#ifndef DISABLE_DEPRECATED
+        // Write compatibility hashes file (only if data exists)
+        if (compat_data.methods.size() > 0) {
+            String compat_path = compat_dir + String("/") + String(cls.name) + String(FILE_EXT_COMPAT);
+            ApiStoreWriter::write_compatibility_hashes(compat_path, compat_data);
+        }
+#endif // DISABLE_DEPRECATED
 
         // Write document file
         String doc_path = doc_dir + String("/") + String(cls.name) + String(FILE_EXT_DOC);

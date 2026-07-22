@@ -579,6 +579,8 @@ namespace jsb
 
     void JavaScriptDebugger::init(v8::Isolate* p_isolate, uint16_t p_port)
     {
+        ERR_FAIL_COND_MSG(p_port == 0, "Debugger should be initialized with an valid port, but receiving 0 port.");
+
         jsb_check(!impl);
         impl = memnew(JavaScriptDebuggerImpl(p_isolate, p_port));
         impl->init();
@@ -596,6 +598,11 @@ namespace jsb
             memdelete(impl);
             impl = nullptr;
         }
+    }
+
+    bool JavaScriptDebugger::is_initialized() const
+    {
+        return impl != nullptr; 
     }
 
     void JavaScriptDebugger::on_context_created(const v8::Local<v8::Context>& p_context)

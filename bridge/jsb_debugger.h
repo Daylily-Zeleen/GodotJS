@@ -16,6 +16,7 @@ namespace jsb
         void init(v8::Isolate* p_isolate, uint16_t p_port);
         void update();
         void drop();
+        bool is_initialized() const;
 
     protected:
         void on_context_created(const v8::Local<v8::Context>& p_context);

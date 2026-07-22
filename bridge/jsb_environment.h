@@ -411,6 +411,7 @@ namespace jsb
         ModuleReloadResult::Type mark_as_reloading(const StringName& p_name);
 
         void start_debugger(uint16_t p_port);
+        bool is_debugger_started() const;
 
         // whether it's called from the same thread as the environment spawned
         jsb_force_inline bool is_caller_thread() const { return thread_id_ == jsb::compat::UNASSIGNED_THREAD_ID || OS::get_singleton()->get_thread_caller_id() == thread_id_; }

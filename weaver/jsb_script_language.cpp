@@ -94,7 +94,7 @@ void GodotJSScriptLanguage::_init()
     params.initial_class_slots = (int) ClassDBSingleton::get_singleton()->get_class_list().size() + JSB_MASTER_INITIAL_CLASS_EXTRA_SLOTS;
     params.initial_object_slots = JSB_MASTER_INITIAL_OBJECT_SLOTS;
     params.initial_script_slots = JSB_MASTER_INITIAL_SCRIPT_SLOTS;
-    // params.debugger_port = jsb::internal::Settings::get_debugger_port();
+    params.debugger_port = jsb::internal::Settings::get_debugger_port();
     params.thread_id = OS::get_singleton()->get_thread_caller_id();
 
     // main environment

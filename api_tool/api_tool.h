@@ -103,16 +103,11 @@ int32_t get_global_enum_count();
 int32_t get_global_constant_count();
 
 // ============================================================================
-// TODO:
-// - 解析 hash_compatibility 时单独将他们抽离出来保存到单独文件（以类为单位，如果没有则不生成对应文件）
-// - ApiMemberMethodBase 不再存 godot::LocalVector<int64_t> hash_compatibility;
-// - 实现上不需要为这些信息进行缓存，类似文档查询
+// Compatibility hash queries (no cache, direct file read)
 // ============================================================================
 
-// TODO: 实现
-godot::LocalVector<uint32_t> get_builtin_method_compatibility_hashes(godot::Variant::Type p_type, const godot::StringName& p_name);
-// TODO: 实现
-godot::LocalVector<uint32_t> get_class_method_compatibility_hashes(const godot::StringName &p_class_name, const godot::StringName& p_name);
+godot::LocalVector<MethodHash> get_builtin_method_compatibility_hashes(godot::Variant::Type p_type, const godot::StringName& p_name);
+godot::LocalVector<MethodHash> get_class_method_compatibility_hashes(const godot::StringName &p_class_name, const godot::StringName& p_name);
 
 // ============================================================================
 // Editor-only: API generation (only TOOLS_ENABLED)

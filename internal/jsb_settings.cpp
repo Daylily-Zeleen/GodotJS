@@ -379,11 +379,33 @@ namespace jsb::internal
 
     uint16_t Settings::get_debugger_port()
     {
+        static uint16_t debugger_port_override = [] {
+            // Check for --js-debugger-port <port> command line argument.
+            const PackedStringArray &cmdline_args = OS::get_singleton()->get_cmdline_args();
+            for (int i = 0; i < cmdline_args.size() - 1; i++) {
+                if (cmdline_args[i] == "--js-debugger-port") {
+                    const String port_text = cmdline_args[i + 1];
+                    if (!port_text.is_empty() && port_text.is_valid_int()) {
+                        uint16_t port = port_text.to_int();
+                        jsb_notice(port > 0, "Found \"--js-debugger-port\" argument, debugger will start on port %d", port);
+                        return port;
+                    }
+                    break;
+                }
+            }
+            return (uint16_t)0;
+        }();
+
+        if (debugger_port_override != 0) return debugger_port_override;
 #ifdef TOOLS_ENABLED
         if (Engine::get_singleton()->is_editor_hint())
         {
-            init_editor_settings();
-            return EDITOR_GET(kEdDebuggerPort);
+            if (get_editor_settings()) {
+                init_editor_settings();
+                return EDITOR_GET(kEdDebuggerPort);
+            } else {
+                return 0; // 确保使用 0 无法启动调试功能
+            }
         }
 #endif
         init_settings();

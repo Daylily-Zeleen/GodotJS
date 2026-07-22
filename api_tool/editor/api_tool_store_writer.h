@@ -26,6 +26,7 @@ public:
     static godot::Error write_utility_function_document(const godot::String &p_path, const ApiUtilityFunctionDocument &p_data);
     static godot::Error write_global_enum_document(const godot::String &p_path, const ApiGlobalEnumDocument &p_data);
     static godot::Error write_global_constant_document(const godot::String &p_path, const ApiGlobalConstantDocument &p_data);
+    static godot::Error write_compatibility_hashes(const godot::String &p_path, const ApiCompatibilityHashData &p_data);
 };
 
 } // namespace api_tool

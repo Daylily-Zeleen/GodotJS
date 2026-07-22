@@ -22,6 +22,8 @@ namespace internal{
 class ApiStoreReader;
 }
 
+using MethodHash = uint32_t;
+
 const godot::String &get_variant_operator_name(godot::Variant::Operator p_op);
 
 // ============================================================================
@@ -42,8 +44,11 @@ constexpr const char *DIR_DOC_UTILITY_FUNCTIONS = "documents/utility_functions";
 constexpr const char *DIR_DOC_GLOBAL_ENUMS = "documents/global_enums";
 constexpr const char *DIR_DOC_GLOBAL_CONSTANTS = "documents/global_constants";
 
+constexpr const char *DIR_COMPAT_HASHES = "compat_hashes";
+
 constexpr const char *FILE_EXT_DATA = ".capi";
 constexpr const char *FILE_EXT_DOC = ".bdoc";
+constexpr const char *FILE_EXT_COMPAT = ".chash";
 
 constexpr const char *FILE_HEADER = "header.capi";
 constexpr const char *FILE_UTILITY_FUNCTIONS = "utility_functions.capi";
@@ -74,7 +79,7 @@ struct ApiHeader {
 
 struct ApiMethodBase {
     godot::MethodInfo method;
-    uint32_t hash = 0;
+    MethodHash hash = 0;
 
 public:
     _FORCE_INLINE_ bool is_vararg() const {return method.flags & godot::METHOD_FLAG_VARARG; }
@@ -82,22 +87,21 @@ public:
 };
 
 struct ApiMemberMethodBase: public ApiMethodBase {
-    godot::LocalVector<int64_t> hash_compatibility; // TODO: 移除，不保存在 ApiMemberMethodBase 中，如有需要，通过 api_tool 的对外接口查询内建类与非内建类特定函数的兼容性哈希值
-public:
     _FORCE_INLINE_ bool is_static() const {return method.flags & godot::METHOD_FLAG_STATIC;}
 };
 
 struct ApiBuiltInMethod : public ApiMemberMethodBase {
 private:
-    mutable GDExtensionPtrBuiltInMethod func = nullptr; // Private member, loaded lazily
-
-    godot::Variant::Type variant_type = godot::Variant::NIL; // Store type for lazy loading
+    mutable GDExtensionPtrBuiltInMethod func;// = nullptr; // Private member, loaded lazily
+    godot::Variant::Type variant_type;// = godot::Variant::NIL; // Store type for lazy loading
 
     mutable bool is_static_ = false;
     mutable bool is_vararg_ = false;
     mutable bool has_returns_ = false;
 
     friend class internal::ApiStoreReader;
+
+    void try_load_compatible_func_ptr() const;
 public:
     _FORCE_INLINE_ GDExtensionPtrBuiltInMethod get_func_ptr() const { 
         using namespace godot;
@@ -107,6 +111,9 @@ public:
                 method.name._native_ptr(),
                 (GDExtensionInt)hash
             );
+
+            if (unlikely(!func)) try_load_compatible_func_ptr(); // 虽然不太可能用到，保险起见
+
             if (func == nullptr) {
                 ERR_PRINT_ONCE("Failed to load built in function: " + Variant::get_type_name(variant_type) + "::" + method.name);
                 return func;
@@ -117,8 +124,7 @@ public:
         }
         return func;
     }
-    // _FORCE_INLINE_  TODO
-    void validated_call(godot::Variant *base, const godot::Variant **p_args, int p_argcount, godot::Variant *r_ret) const {
+    _FORCE_INLINE_ void validated_call(godot::Variant *base, const godot::Variant **p_args, int p_argcount, godot::Variant *r_ret) const {
         using namespace godot;
         GDExtensionPtrBuiltInMethod func_ptr = get_func_ptr();
         ERR_FAIL_NULL_MSG(func_ptr, "Call on missing built-in function: " + Variant::get_type_name(variant_type) + "::" + method.name);
@@ -182,11 +188,6 @@ public:
             internal::dctor_arg_ptr(ret_ptr, method.return_val.type);
         }
     };
-
-    // Setter for variant_type (called during parsing)
-    inline void set_variant_type(godot::Variant::Type p_type) {
-        variant_type = p_type;
-    }
 };
 
 struct ApiClassMethod: public ApiMemberMethodBase {
@@ -200,6 +201,7 @@ private:
 
     friend class internal::ApiStoreReader;
 
+    void try_load_compatible_method_bind() const;
 public:
     _FORCE_INLINE_ bool is_virtual() const { return method.flags & (godot::METHOD_FLAG_VIRTUAL | godot::METHOD_FLAG_VIRTUAL_REQUIRED) ; }
     _FORCE_INLINE_ GDExtensionMethodBindPtr get_method_bind_ptr() const { 
@@ -209,6 +211,9 @@ public:
                 method.name._native_ptr(),
                 (GDExtensionInt)hash
             );
+
+            if (unlikely(!method_bind)) try_load_compatible_method_bind(); // 虽然不太可能用到，保险起见
+
             if (method_bind == nullptr) {
                 ERR_PRINT_ONCE("Failed to load function: " + owner_class_name + "::" + method.name);
                 return method_bind;
@@ -318,6 +323,19 @@ public:
             internal::dctor_arg_ptr(ret_ptr, method.return_val.type);
         }
     };
+};
+
+// ============================================================================
+// Compatibility Hashes (per-class file, queried on demand)
+// ============================================================================
+
+struct ApiMethodCompatibilityHashes {
+    godot::StringName method_name;
+    godot::LocalVector<MethodHash> hashes;
+};
+
+struct ApiCompatibilityHashData {
+    godot::LocalVector<ApiMethodCompatibilityHashes> methods;
 };
 
 // ============================================================================
@@ -519,7 +537,7 @@ struct ApiBuiltinClass {
     godot::LocalVector<ApiEnumInfo> enums;
     godot::LocalVector<ApiBuiltInMethod> methods;
     godot::LocalVector<ApiOperatorInfo> operators;
-    godot::LocalVector<ApiConstructorInfo> constructors;
+    godot::LocalVector<ApiConstructorInfo> constructors; // 解析时已按 index 排序
 
     godot::Variant::Type type = godot::Variant::NIL;
     godot::Variant::Type indexing_type = godot::Variant::NIL;
@@ -626,7 +644,7 @@ public:
 // ============================================================================
 
 struct ApiClass {
-    godot::LocalVector<ApiClassMethod> methods; // TODO: 根据 godot 的 ClassDB 的话 虚函数 和 非虚函数 是存在不同的map里，分别是 MethodInfo 和 MethodBind，是否考虑相应调整？
+    godot::LocalVector<ApiClassMethod> methods;
     godot::LocalVector<ApiSignalInfo> signals;
     godot::LocalVector<ApiPropertyInfo> properties;
     godot::LocalVector<ApiEnumInfo> enums;
@@ -688,7 +706,9 @@ struct ApiEnumDocument {
 
 using ApiOperatorDocument = internal::ApiNameDescriptionDocument;
 
-using ApiConstructorDocument = internal::ApiNameDescriptionDocument;
+struct ApiConstructorDocument {
+    godot::String description;
+};
 
 // ============================================================================
 // Top-level document structures (one .doc file per entity)
@@ -702,7 +722,7 @@ struct ApiClassDocument {
     // BuiltInClass-specific fields (empty for regular classes)
     godot::LocalVector<ApiConstantDocument> constants;
     godot::LocalVector<ApiOperatorDocument> operators;
-    godot::LocalVector<ApiConstructorDocument> constructors;
+    godot::LocalVector<ApiConstructorDocument> constructors; // 解析时已按 index 排序
     godot::String name;
     godot::String brief_description;
     godot::String description;

@@ -390,6 +390,60 @@ std::unique_ptr<ApiGlobalConstantDocument> ApiLoader::find_global_constant_docum
 #endif // TOOLS_ENABLED
 
 // ============================================================================
+// Compatibility hash queries (no cache, direct file read)
+// ============================================================================
+
+LocalVector<MethodHash> ApiLoader::get_builtin_method_compatibility_hashes(Variant::Type p_type, const StringName &p_method_name) {
+#ifndef DISABLE_DEPRECATED
+    LocalVector<MethodHash> result;
+    String path = base_dir_ + "/" + String(DIR_COMPAT_HASHES) + "/" + Variant::get_type_name(p_type) + String(FILE_EXT_COMPAT);
+    if (!FileAccess::file_exists(path)) {
+        return result;
+    }
+
+    ApiCompatibilityHashData data;
+    Error err = ApiStoreReader::read_compatibility_hashes(path, data);
+    if (err != OK) {
+        return result;
+    }
+
+    for (const auto &m : data.methods) {
+        if (m.method_name == p_method_name) {
+            return m.hashes;
+        }
+    }
+    return result;
+#else // DISABLE_DEPRECATED
+    return {};
+#endif // DISABLE_DEPRECATED
+}
+
+LocalVector<MethodHash> ApiLoader::get_class_method_compatibility_hashes(const StringName &p_class_name, const StringName &p_method_name) {
+#ifndef DISABLE_DEPRECATED
+    LocalVector<MethodHash> result;
+    String path = base_dir_ + "/" + String(DIR_COMPAT_HASHES) + "/" + String(p_class_name) + String(FILE_EXT_COMPAT);
+    if (!FileAccess::file_exists(path)) {
+        return result;
+    }
+
+    ApiCompatibilityHashData data;
+    Error err = ApiStoreReader::read_compatibility_hashes(path, data);
+    if (err != OK) {
+        return result;
+    }
+
+    for (const auto &m : data.methods) {
+        if (m.method_name == p_method_name) {
+            return m.hashes;
+        }
+    }
+    return result;
+#else // DISABLE_DEPRECATED
+    return {};
+#endif // DISABLE_DEPRECATED
+}
+
+// ============================================================================
 // Name list cache population (caller must hold lock)
 // ============================================================================
 

@@ -28,6 +28,7 @@ public:
     static godot::Error read_global_enum_document(const godot::String &p_path, ApiGlobalEnumDocument &r_data);
     static godot::Error read_global_constant_document(const godot::String &p_path, ApiGlobalConstantDocument &r_data);
 #endif // TOOLS_ENABLED
+    static godot::Error read_compatibility_hashes(const godot::String &p_path, ApiCompatibilityHashData &r_data);
 };
 
 } // namespace api_tool

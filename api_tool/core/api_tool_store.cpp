@@ -41,7 +41,6 @@ template<typename TApiMethodInfo> requires std::is_base_of_v<ApiMemberMethodBase
 static void deserialize_api_method_info(PayloadReader &r, TApiMethodInfo &ami) {
     r.read(ami.method, deserialize_method_info_core);
     r.read(ami.hash);
-    r.read(ami.hash_compatibility);
 }
 
 static void deserialize_utility_function_info(PayloadReader &r, ApiUtilityFunction &ami) {
@@ -94,6 +93,13 @@ static void deserialize_operator_info(PayloadReader &r, ApiOperatorInfo &v) {
 
 static void deserialize_constructor_info(PayloadReader &r, ApiConstructorInfo &v) {
     r.read(v.arguments, deserialize_property_info);
+}
+
+static void deserialize_method_compat_hashes(PayloadReader &r, ApiMethodCompatibilityHashes &v) {
+#ifndef DISABLE_DEPRECATED
+    r.read(v.method_name);
+    r.read(v.hashes);
+#endif // DISABLE_DEPRECATED
 }
 
 static void deserialize_member_info(PayloadReader &r, ApiMemberInfo &v) {
@@ -162,7 +168,7 @@ Error ApiStoreReader::read_builtin_class(const String &p_path, ApiBuiltinClass &
 
     // Special handle for initialization.
     for (auto &m : r_data.methods) {
-        m.set_variant_type(r_data.type);
+        m.variant_type = r_data.type;
     }
     r_data.initialize();
     return OK;
@@ -307,7 +313,6 @@ static void deserialize_operator_document(PayloadReader &r, ApiOperatorDocument 
 }
 
 static void deserialize_constructor_document(PayloadReader &r, ApiConstructorDocument &d) {
-    r.read(d.index);
     r.read(d.description);
 }
 
@@ -363,5 +368,21 @@ Error ApiStoreReader::read_global_constant_document(const godot::String &p_path,
     return OK;
 }
 #endif // TOOLS_ENABLED
+
+// ============================================================================
+// ApiStoreReader: Compatibility Hashes (per-class file)
+// ============================================================================
+
+Error ApiStoreReader::read_compatibility_hashes(const godot::String &p_path, ApiCompatibilityHashData &r_data) {
+#ifndef DISABLE_DEPRECATED
+    Error err {OK};
+    std::unique_ptr<PayloadReader> r_ptr = PayloadReader::open(p_path, err);
+    if (err) return err;
+    PayloadReader &r = *r_ptr.get();
+
+    r.read(r_data.methods, deserialize_method_compat_hashes);
+#endif // DISABLE_DEPRECATED
+    return OK;
+}
 
 } // namespace api_tool
