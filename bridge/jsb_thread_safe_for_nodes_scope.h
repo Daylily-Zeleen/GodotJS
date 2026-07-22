@@ -5,6 +5,7 @@
 
 #include "core/os/thread_safe.h"
 
+// TODO: godot 没有暴露相关接口
 namespace jsb
 {
     class ThreadSafeForNodesScope
@@ -14,13 +15,13 @@ namespace jsb
     public:
         ThreadSafeForNodesScope()
         {
-            previously_thread_safe_ = is_current_thread_safe_for_nodes();
-            set_current_thread_safe_for_nodes(true);
+            // previously_thread_safe_ = is_current_thread_safe_for_nodes();
+            // set_current_thread_safe_for_nodes(true);
         }
 
         ~ThreadSafeForNodesScope()
         {
-            set_current_thread_safe_for_nodes(previously_thread_safe_);
+            // set_current_thread_safe_for_nodes(previously_thread_safe_);
         }
     };
 }

@@ -43,11 +43,11 @@ namespace jsb::internal
                 }
                 case Variant::Type::DICTIONARY: {
                     const Dictionary& d = p_variant;
-                    return HashMapHasherDefault::hash(d.id());
+                    return HashMapHasherDefault::hash(d.hash()); // TODO: Godot 没有暴露 Dictionary::id()
                 }
                 case Variant::Type::ARRAY: {
                     const Array& a = p_variant;
-                    return HashMapHasherDefault::hash(a.id());
+                    return HashMapHasherDefault::hash(a.hash()); // TODO: Godot 没有暴露 Array::id()
                 }
                 case Variant::Type::STRING: {
                     const String& s = p_variant;
